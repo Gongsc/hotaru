@@ -1,0 +1,15 @@
+# Rust build artifacts (any crate in the repo)
+target/
+
+# Frontend (reserved)
+node_modules/
+
+# Tauri generated files
+src-tauri/gen/
+
+# ZCode session artifacts (workspace skills under .zcode/skills are kept)
+.zcode/plans/
+
+# OS
+.DS_Store
+Thumbs.db

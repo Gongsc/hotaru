@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Komari Tray 设置</title>
+<style>
+  :root {
+    --bg: #0b1220; --panel: #111a2c; --field: #0d1626; --border: #22304a;
+    --text: #e6edf7; --muted: #8fa1bb; --accent: #34d399; --accent2: #38bdf8;
+    --danger: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5;
+  }
+  main { max-width: 600px; margin: 0 auto; padding: 20px 20px 96px; }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .logo {
+    width: 30px; height: 30px; border-radius: 9px; flex: none;
+    background: linear-gradient(135deg, #34d399, #38bdf8);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .logo svg { width: 18px; height: 18px; }
+  section {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 14px;
+  }
+  section h2 {
+    font-size: 12px; margin: 0 0 12px; color: var(--muted);
+    font-weight: 600; letter-spacing: .08em;
+  }
+  label.field { display: block; margin-bottom: 12px; }
+  label.field > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+  input[type="text"], input[type="password"], input[type="number"], select {
+    width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--field); color: var(--text); font-size: 14px; outline: none;
+  }
+  input:focus, select:focus {
+    border-color: var(--accent2);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, .25);
+  }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; cursor: pointer; user-select: none; }
+  .check input { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+  .radio-row { display: flex; gap: 16px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .radio-row .check { margin: 0; }
+  .btn {
+    padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: #1a2740; color: var(--text); cursor: pointer; font-size: 13px;
+  }
+  .btn:hover { background: #223154; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn.primary { background: var(--accent); color: #06281c; border-color: transparent; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid var(--accent2); outline-offset: 2px;
+  }
+  #testResult { margin-top: 10px; font-size: 12px; color: var(--muted); min-height: 16px; word-break: break-all; }
+  #testResult.ok { color: var(--accent); }
+  #testResult.err { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+  .dot.ok { background: var(--accent); }
+  .dot.off { background: var(--danger); }
+  .dot.err { background: #64748b; }
+  .status-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+  .status-msg { color: var(--danger); font-size: 12px; margin-top: 8px; word-break: break-all; }
+  footer {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(transparent, var(--bg) 35%);
+    padding: 16px 20px; display: flex; justify-content: flex-end; gap: 10px;
+  }
+  #toast {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+    background: #052e22; color: var(--accent); border: 1px solid var(--accent);
+    padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .25s;
+    pointer-events: none; font-size: 13px; z-index: 10;
+  }
+  #toast.show { opacity: 1; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .hint a { color: var(--accent2); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#0b1220" stroke-width="2.4" stroke-linecap="round">
+        <path d="M12 3a9 9 0 1 0 9 9" />
+        <path d="M12 8v4l3 2" />
+      </svg>
+    </div>
+    <h1>Komari Tray 设置</h1>
+  </header>
+
+  <section>
+    <h2>连接</h2>
+    <label class="field">
+      <span>后端地址</span>
+      <input type="text" id="backendUrl" placeholder="https://komari.example.com" spellcheck="false" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>API Key（私有站点或需要更全数据时填写）</span>
+      <input type="password" id="apiKey" placeholder="可选" autocomplete="off">
+    </label>
+    <div style="display:flex; gap:10px; align-items:flex-start;">
+      <button class="btn" id="testBtn" type="button">测试连接</button>
+      <label class="check" style="margin-top:4px;">
+        <input type="checkbox" id="acceptInvalid"> 允许自签名证书
+      </label>
+    </div>
+    <div id="testResult" role="status"></div>
+  </section>
+
+  <section>
+    <h2>托盘</h2>
+    <div class="radio-row" role="radiogroup" aria-label="托盘数据源">
+      <label class="check"><input type="radio" name="trayMode" id="modeAggregate" value="aggregate"> 汇总全部节点</label>
+      <label class="check"><input type="radio" name="trayMode" id="modeNode" value="node"> 关注单个节点</label>
+      <select id="nodeSelect" style="flex:1; min-width:140px;" aria-label="选择关注的节点">
+        <option value="">（暂无节点）</option>
+      </select>
+    </div>
+    <label class="check" id="macTitleRow">
+      <input type="checkbox" id="showTitle"> macOS 菜单栏显示实时速率文字
+    </label>
+    <div class="row" style="margin-top:12px;">
+      <label class="field">
+        <span>刷新间隔（秒）</span>
+        <input type="number" id="pollInterval" min="1" max="60" step="1">
+      </label>
+      <label class="field">
+        <span>CPU 告警阈值（%）</span>
+        <input type="number" id="cpuWarn" min="1" max="100">
+      </label>
+      <label class="field">
+        <span>内存告警阈值（%）</span>
+        <input type="number" id="memWarn" min="1" max="100">
+      </label>
+    </div>
+    <p class="hint">图标颜色：绿 = 正常，黄 = 超过告警阈值，红 = 严重/离线，灰 = 后端不可达。汇总模式下有节点离线时图标右上角显示红点。</p>
+    <label class="check">
+      <input type="checkbox" id="autostart"> 开机自启
+    </label>
+  </section>
+
+  <section>
+    <h2>实时状态</h2>
+    <div class="status-head">
+      <span><span class="dot err" id="statusDot"></span> <span id="statusText">加载中…</span></span>
+      <span id="updatedText"></span>
+    </div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr><th>节点</th><th>CPU</th><th>内存</th><th>↑</th><th>↓</th><th>状态</th></tr>
+        </thead>
+        <tbody id="nodeRows">
+          <tr><td colspan="6" style="color:var(--muted)">等待数据…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="status-msg" id="statusMsg" hidden></div>
+  </section>
+</main>
+
+<footer>
+  <button class="btn" id="openPanelBtn" type="button">打开面板</button>
+  <button class="btn primary" id="saveBtn" type="button">保存</button>
+</footer>
+
+<div id="toast" role="status"></div>
+
+<script>
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+
+const $ = (id) => document.getElementById(id);
+const isMac = /Mac/i.test(navigator.userAgent);
+
+function fmtRate(bps) {
+  if (bps < 1024) return bps.toFixed(0) + 'B/s';
+  if (bps < 1048576) return (bps / 1024).toFixed(1) + 'KB/s';
+  if (bps < 1073741824) return (bps / 1048576).toFixed(2) + 'MB/s';
+  return (bps / 1073741824).toFixed(2) + 'GB/s';
+}
+function pctOf(used, total) { return total > 0 ? (used / total * 100) : 0; }
+function toast(text) {
+  const t = $('toast');
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function collect() {
+  return {
+    backend_url: $('backendUrl').value.trim(),
+    api_key: $('apiKey').value.trim(),
+    poll_interval_secs: Math.max(1, Math.min(60, Number($('pollInterval').value) || 3)),
+    tray_mode: $('modeNode').checked ? 'node' : 'aggregate',
+    pinned_uuid: $('nodeSelect').value,
+    show_menu_bar_text: $('showTitle').checked,
+    cpu_warn_pct: Math.max(1, Math.min(100, Number($('cpuWarn').value) || 80)),
+    mem_warn_pct: Math.max(1, Math.min(100, Number($('memWarn').value) || 85)),
+    accept_invalid_certs: $('acceptInvalid').checked,
+  };
+}
+
+function fillSettings(s) {
+  $('backendUrl').value = s.backend_url || '';
+  $('apiKey').value = s.api_key || '';
+  $('pollInterval').value = s.poll_interval_secs ?? 3;
+  $('cpuWarn').value = s.cpu_warn_pct ?? 80;
+  $('memWarn').value = s.mem_warn_pct ?? 85;
+  $('showTitle').checked = !!s.show_menu_bar_text;
+  $('acceptInvalid').checked = !!s.accept_invalid_certs;
+  if (s.tray_mode === 'node') { $('modeNode').checked = true; } else { $('modeAggregate').checked = true; }
+}
+
+function renderNodes(snap) {
+  const dot = $('statusDot');
+  const statusText = $('statusText');
+  const msg = $('statusMsg');
+  if (snap.backend_ok) {
+    dot.className = 'dot ok';
+    statusText.textContent = `已连接 · 在线 ${snap.nodes.filter(n => n.online).length}/${snap.nodes.length} 个节点`;
+    msg.hidden = true;
+  } else {
+    dot.className = 'dot err';
+    statusText.textContent = '后端不可达';
+    msg.hidden = !snap.error;
+    msg.textContent = snap.error || '';
+  }
+  $('updatedText').textContent = snap.last_update_ms
+    ? '更新于 ' + new Date(snap.last_update_ms).toLocaleTimeString()
+    : '';
+
+  // node select (preserve selection)
+  const sel = $('nodeSelect');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const n of snap.nodes) {
+    const opt = document.createElement('option');
+    opt.value = n.uuid;
+    opt.textContent = n.name + (n.online ? '' : '（离线）');
+    sel.appendChild(opt);
+  }
+  if (!sel.options.length) {
+    sel.innerHTML = '<option value="">（暂无节点）</option>';
+  } else if ([...sel.options].some(o => o.value === prev)) {
+    sel.value = prev;
+  }
+
+  // table
+  const rows = $('nodeRows');
+  if (!snap.nodes.length) {
+    rows.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">等待数据…</td></tr>';
+    return;
+  }
+  rows.innerHTML = snap.nodes.map(n => {
+    const mem = n.ram_total > 0
+      ? `${(n.ram_used / 1073741824).toFixed(1)}/${(n.ram_total / 1073741824).toFixed(1)}GB (${pctOf(n.ram_used, n.ram_total).toFixed(0)}%)`
+      : '-';
+    const state = n.online
+      ? '<span class="dot ok"></span>在线'
+      : '<span class="dot off"></span>离线';
+    return `<tr>
+      <td title="${n.uuid}">${escapeHtml(n.name)}</td>
+      <td>${n.online ? n.cpu_usage.toFixed(0) + '%' : '-'}</td>
+      <td>${n.online ? mem : '-'}</td>
+      <td>${n.online ? fmtRate(n.net_up) : '-'}</td>
+      <td>${n.online ? fmtRate(n.net_down) : '-'}</td>
+      <td>${state}</td>
+    </tr>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+async function refreshAutostart() {
+  try { $('autostart').checked = await invoke('get_autostart'); } catch (_) {}
+}
+
+async function boot() {
+  if (!isMac) $('macTitleRow').style.display = 'none';
+  try {
+    fillSettings(await invoke('get_settings'));
+    renderNodes(await invoke('get_snapshot'));
+  } catch (e) {
+    console.error(e);
+  }
+  await refreshAutostart();
+  await listen('monitor://update', (e) => renderNodes(e.payload));
+}
+
+$('saveBtn').addEventListener('click', async () => {
+  const btn = $('saveBtn');
+  btn.disabled = true;
+  try {
+    const saved = await invoke('save_settings', { settings: collect() });
+    fillSettings(saved);
+    toast('已保存');
+  } catch (e) {
+    toast('保存失败：' + e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('testBtn').addEventListener('click', async () => {
+  const btn = $('testBtn');
+  const out = $('testResult');
+  btn.disabled = true;
+  out.className = '';
+  out.textContent = '正在连接…';
+  try {
+    const r = await invoke('test_connection', { settings: collect() });
+    out.className = 'ok';
+    out.textContent = `${r.message}${r.version ? ' · 版本 ' + r.version : ''}`;
+  } catch (e) {
+    out.className = 'err';
+    out.textContent = String(e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('autostart').addEventListener('change', async (e) => {
+  try {
+    await invoke('set_autostart', { enable: e.target.checked });
+  } catch (err) {
+    e.target.checked = !e.target.checked;
+    toast('设置开机自启失败：' + err);
+  }
+});
+
+$('openPanelBtn').addEventListener('click', () => invoke('open_panel_cmd'));
+
+boot();
+</script>
+</body>
+</html>

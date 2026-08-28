@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the local settings window. The main window loads the remote Komari dashboard and intentionally has no IPC access.",
+  "windows": ["settings"],
+  "permissions": ["core:default"]
+}

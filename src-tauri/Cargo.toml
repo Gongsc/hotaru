@@ -2,7 +2,7 @@
 name = "hotaru"
 version = "0.1.1"
 description = "Komari monitoring tray app for macOS and Windows"
-license = "MIT"
+license = "GPL-3.0-only"
 authors = ["Gongsc"]
 edition = "2021"
 

@@ -4,7 +4,7 @@ Komari（[komari-monitor/komari](https://github.com/komari-monitor/komari)）的
 
 > 命名：Komari 出自《悠哉日常大王》（越谷小鞠），Hotaru（萤）取自同一作品——像一只停在屏幕角落、为你的服务器闪烁信号的小萤火虫。
 
-![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue) ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 
 ## 功能
 
@@ -60,7 +60,7 @@ cargo tauri build    # 产出安装包
 
 ## 许可证
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE)
 
 ## 已知限制
 

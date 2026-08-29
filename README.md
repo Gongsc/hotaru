@@ -58,6 +58,10 @@ cargo tauri build    # 产出安装包
 - macOS：`aarch64-apple-darwin`（Apple Silicon）与 `x86_64-apple-darwin`（Intel）→ `.dmg`
 - Windows：`x86_64-pc-windows-msvc` → NSIS `.exe` 安装包
 
+## 许可证
+
+[MIT](LICENSE)
+
 ## 已知限制
 
 - Windows 托盘无法显示文字速率（系统限制），信息见悬浮提示与菜单。

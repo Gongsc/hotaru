@@ -1,5 +1,6 @@
-use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+use parking_lot::{const_mutex, Mutex};
+use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_autostart::ManagerExt as _;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
@@ -17,7 +18,14 @@ pub const TRAY_ID: &str = "hotaru-main-tray";
 // ---------------------------------------------------------------------------
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let menu = build_menu(app, &Settings::default(), &MonitorSnapshot::offline("正在连接后端…"))?;
+    let cache = {
+        let st = app.state::<AppState>();
+        let settings = st.settings.read().clone();
+        let snap = st.snapshot.read().clone();
+        MenuCache::build(app, &settings, &snap)?
+    };
+    let menu = cache.menu.clone();
+    *MENU_CACHE.lock() = Some(cache);
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(tauri::image::Image::new_owned(
             draw_icon(&IconState { severity: Severity::Down, gauge: None, badge: false }),
@@ -63,8 +71,8 @@ pub fn apply(app: &AppHandle) {
         let _ = tray.set_title(None::<String>);
     }
 
-    if let Ok(menu) = build_menu(app, &settings, &snap) {
-        let _ = tray.set_menu(Some(menu));
+    if let Err(e) = sync_menu(app, &tray, &settings, &snap) {
+        log::error!("更新托盘菜单失败: {e}");
     }
 }
 
@@ -72,92 +80,165 @@ pub fn apply(app: &AppHandle) {
 // Menu
 // ---------------------------------------------------------------------------
 
-fn build_menu(
+/// Cached tray menu with handles to its dynamic items.
+///
+/// The native menu must NOT be rebuilt on every snapshot tick: swapping the
+/// menu underneath an open popup (Windows recycles the internal item ids of
+/// destroyed menus) makes the next click resolve to the wrong item — in the
+/// worst case "退出", so the app appeared to quit on its own. Rebuild only
+/// when the menu structure changes; patch item texts / check states in place
+/// otherwise.
+struct MenuCache {
+    structure_key: String,
+    menu: Menu<Wry>,
+    header: MenuItem<Wry>,
+    node_lines: Vec<(String, MenuItem<Wry>)>,
+    mode_aggregate: CheckMenuItem<Wry>,
+    node_checks: Vec<(String, CheckMenuItem<Wry>)>,
+    autostart: CheckMenuItem<Wry>,
+}
+
+static MENU_CACHE: Mutex<Option<MenuCache>> = const_mutex(None);
+
+/// Everything that requires creating/destroying menu items — and therefore a
+/// full menu rebuild — when it changes. Node data (names, load values) is not
+/// part of it: those are updated in place via `set_text`.
+fn structure_key(settings: &Settings, nodes: &[NodeSnapshot]) -> String {
+    let mut uuids: Vec<&str> = nodes.iter().map(|n| n.uuid.as_str()).collect();
+    uuids.sort_unstable();
+    format!(
+        "{:?}|{}|{}",
+        settings.tray_mode,
+        settings.pinned_uuid,
+        uuids.join(","),
+    )
+}
+
+impl MenuCache {
+    fn build(app: &AppHandle, settings: &Settings, snap: &MonitorSnapshot) -> tauri::Result<Self> {
+        let scope = scoped_nodes(settings, &snap.nodes);
+        let agg = aggregate(&scope);
+
+        let header = MenuItem::with_id(
+            app,
+            "header",
+            header_text(snap, &agg),
+            false,
+            None::<&str>,
+        )?;
+
+        let mut node_lines = Vec::new();
+        for n in &scope {
+            node_lines.push((
+                n.uuid.clone(),
+                MenuItem::with_id(app, format!("info-{}", n.uuid), node_line(n), false, None::<&str>)?,
+            ));
+        }
+
+        let open_panel = MenuItem::with_id(app, "open-panel", "打开面板", true, None::<&str>)?;
+        let open_settings = MenuItem::with_id(app, "open-settings", "设置…", true, None::<&str>)?;
+
+        let mode = Submenu::with_id(app, "mode-sub", "托盘数据源", true)?;
+        let mode_aggregate = CheckMenuItem::with_id(
+            app,
+            "mode-aggregate",
+            "汇总全部节点",
+            true,
+            settings.tray_mode == TrayMode::Aggregate,
+            None::<&str>,
+        )?;
+        mode.append(&mode_aggregate)?;
+        let mut node_checks = Vec::new();
+        for n in &scope {
+            let item = CheckMenuItem::with_id(
+                app,
+                format!("node-{}", n.uuid),
+                format!("关注：{}", truncate(&n.name, 20)),
+                true,
+                settings.tray_mode == TrayMode::Node && settings.pinned_uuid == n.uuid,
+                None::<&str>,
+            )?;
+            mode.append(&item)?;
+            node_checks.push((n.uuid.clone(), item));
+        }
+
+        let autostart = CheckMenuItem::with_id(
+            app,
+            "autostart",
+            "开机自启",
+            true,
+            app.autolaunch().is_enabled().unwrap_or(false),
+            None::<&str>,
+        )?;
+        let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+
+        let sep_header = PredefinedMenuItem::separator(app)?;
+        let sep_nodes = PredefinedMenuItem::separator(app)?;
+        let sep_actions = PredefinedMenuItem::separator(app)?;
+        let sep_bottom = PredefinedMenuItem::separator(app)?;
+
+        let menu = Menu::new(app)?;
+        menu.append(&header)?;
+        menu.append(&sep_header)?;
+        for (_, item) in &node_lines {
+            menu.append(item)?;
+        }
+        menu.append(&sep_nodes)?;
+        menu.append(&open_panel)?;
+        menu.append(&open_settings)?;
+        menu.append(&sep_actions)?;
+        menu.append(&mode)?;
+        menu.append(&autostart)?;
+        menu.append(&sep_bottom)?;
+        menu.append(&quit)?;
+
+        Ok(Self {
+            structure_key: structure_key(settings, &snap.nodes),
+            menu,
+            header,
+            node_lines,
+            mode_aggregate,
+            node_checks,
+            autostart,
+        })
+    }
+}
+
+fn sync_menu(
     app: &AppHandle,
+    tray: &TrayIcon<Wry>,
     settings: &Settings,
     snap: &MonitorSnapshot,
-) -> tauri::Result<Menu<Wry>> {
-    let scope = scoped_nodes(settings, &snap.nodes);
-    let agg = aggregate(&scope);
+) -> tauri::Result<()> {
+    let key = structure_key(settings, &snap.nodes);
+    let mut cache = MENU_CACHE.lock();
 
-    let mut items: Vec<Box<dyn IsMenuItem<Wry>>> = Vec::new();
-
-    let header = MenuItem::with_id(
-        app,
-        "header",
-        header_text(snap, &agg),
-        false,
-        None::<&str>,
-    )?;
-    items.push(Box::new(header));
-    items.push(Box::new(PredefinedMenuItem::separator(app)?));
-
-    for n in &scope {
-        let line = MenuItem::with_id(app, format!("info-{}", n.uuid), node_line(n), false, None::<&str>)?;
-        items.push(Box::new(line));
+    if let Some(c) = cache.as_mut() {
+        if c.structure_key == key {
+            let scope = scoped_nodes(settings, &snap.nodes);
+            let agg = aggregate(&scope);
+            let _ = c.header.set_text(header_text(snap, &agg));
+            for n in &scope {
+                if let Some((_, item)) = c.node_lines.iter().find(|(u, _)| u == &n.uuid) {
+                    let _ = item.set_text(node_line(n));
+                }
+                if let Some((_, chk)) = c.node_checks.iter().find(|(u, _)| u == &n.uuid) {
+                    let _ = chk.set_text(format!("关注：{}", truncate(&n.name, 20)));
+                    let _ = chk.set_checked(
+                        settings.tray_mode == TrayMode::Node && settings.pinned_uuid == n.uuid,
+                    );
+                }
+            }
+            let _ = c.mode_aggregate.set_checked(settings.tray_mode == TrayMode::Aggregate);
+            let _ = c.autostart.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
+            return Ok(());
+        }
     }
-    items.push(Box::new(PredefinedMenuItem::separator(app)?));
 
-    items.push(Box::new(MenuItem::with_id(
-        app,
-        "open-panel",
-        "打开面板",
-        true,
-        None::<&str>,
-    )?));
-    items.push(Box::new(MenuItem::with_id(
-        app,
-        "open-settings",
-        "设置…",
-        true,
-        None::<&str>,
-    )?));
-    items.push(Box::new(PredefinedMenuItem::separator(app)?));
-
-    let mode = Submenu::with_id(app, "mode-sub", "托盘数据源", true)?;
-    mode.append(&CheckMenuItem::with_id(
-        app,
-        "mode-aggregate",
-        "汇总全部节点",
-        true,
-        settings.tray_mode == TrayMode::Aggregate,
-        None::<&str>,
-    )?)?;
-    for n in &scope {
-        mode.append(&CheckMenuItem::with_id(
-            app,
-            format!("node-{}", n.uuid),
-            format!("关注：{}", truncate(&n.name, 20)),
-            true,
-            settings.tray_mode == TrayMode::Node && settings.pinned_uuid == n.uuid,
-            None::<&str>,
-        )?)?;
-    }
-    items.push(Box::new(mode));
-
-    let autostart_on = app
-        .autolaunch()
-        .is_enabled()
-        .unwrap_or(false);
-    items.push(Box::new(CheckMenuItem::with_id(
-        app,
-        "autostart",
-        "开机自启",
-        true,
-        autostart_on,
-        None::<&str>,
-    )?));
-    items.push(Box::new(PredefinedMenuItem::separator(app)?));
-    items.push(Box::new(MenuItem::with_id(
-        app,
-        "quit",
-        "退出",
-        true,
-        None::<&str>,
-    )?));
-
-    let refs: Vec<&dyn IsMenuItem<Wry>> = items.iter().map(|b| b.as_ref()).collect();
-    Menu::with_items(app, &refs)
+    let fresh = MenuCache::build(app, settings, snap)?;
+    let _ = tray.set_menu(Some(fresh.menu.clone()));
+    *cache = Some(fresh);
+    Ok(())
 }
 
 fn on_menu_event(app: &AppHandle, event: MenuEvent) {

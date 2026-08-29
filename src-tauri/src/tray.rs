@@ -10,7 +10,7 @@ use crate::models::{
 };
 use crate::state::AppState;
 
-pub const TRAY_ID: &str = "komari-main-tray";
+pub const TRAY_ID: &str = "hotaru-main-tray";
 
 // ---------------------------------------------------------------------------
 // Creation
@@ -24,7 +24,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             ICON_SIZE,
             ICON_SIZE,
         ))
-        .tooltip("Komari Tray · 正在连接后端…")
+        .tooltip("Hotaru · 正在连接后端…")
         .menu(&menu)
         .on_menu_event(on_menu_event)
         .on_tray_icon_event(|tray, event| {
@@ -219,10 +219,10 @@ fn header_text(snap: &MonitorSnapshot, agg: &Aggregate) -> String {
 fn tooltip_text(snap: &MonitorSnapshot, agg: &Aggregate) -> String {
     if !snap.backend_ok {
         let err = snap.error.as_deref().unwrap_or("后端不可达");
-        return format!("Komari Tray · 后端不可达\n{}", truncate(err, 90));
+        return format!("Hotaru · 后端不可达\n{}", truncate(err, 90));
     }
     format!(
-        "Komari Tray · 在线 {}/{}\nCPU {:.0}% · 内存 {:.0}%\n↑{} ↓{}",
+        "Hotaru · 在线 {}/{}\nCPU {:.0}% · 内存 {:.0}%\n↑{} ↓{}",
         agg.online,
         agg.total,
         agg.cpu,

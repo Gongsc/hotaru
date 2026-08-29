@@ -56,5 +56,5 @@ pub fn run() {
             commands::open_settings_cmd,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running komari-tray");
+        .expect("error while running hotaru");
 }

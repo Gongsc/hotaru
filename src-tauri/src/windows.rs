@@ -54,7 +54,7 @@ fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
         .parse()
         .map_err(|_| tauri::Error::WindowNotFound)?;
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-        .title("Komari Panel")
+        .title("Hotaru Panel")
         .inner_size(1200.0, 800.0)
         .min_inner_size(780.0, 560.0)
         .build()?;
@@ -76,7 +76,7 @@ pub fn open_settings(app: &AppHandle) {
                 "settings",
                 WebviewUrl::App("index.html".into()),
             )
-            .title("Komari Tray 设置")
+            .title("Hotaru 设置")
             .inner_size(540.0, 760.0)
             .min_inner_size(480.0, 600.0)
             .build();

@@ -1,12 +1,12 @@
 [package]
-name = "komari-tray"
+name = "hotaru"
 version = "0.1.0"
 description = "Komari monitoring tray app for macOS and Windows"
 authors = ["yuki"]
 edition = "2021"
 
 [lib]
-name = "komari_tray_lib"
+name = "hotaru_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

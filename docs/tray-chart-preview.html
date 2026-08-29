@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hotaru 托盘弹出曲线窗 · 设计预览</title>
+<style>
+  :root {
+    --ink: #1d1d1f; --ink-2: #6e6e73; --page: #f5f5f7; --card: #fff;
+    --line: #e5e5ea; --accent: #0a60ff; --up: #38bdf8; --down: #34d399; --amber: #ff9f0a;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif;
+         background:var(--page); color:var(--ink); padding:40px clamp(20px,5vw,72px) 80px; }
+  h1 { font-size:26px; font-weight:700; letter-spacing:-.02em; }
+  .sub { color:var(--ink-2); font-size:14px; margin:8px 0 8px; line-height:1.7; max-width:860px; }
+  .spec { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0 34px; }
+  .spec span { font-size:12.5px; background:#ececf1; color:#3a3a3c; border-radius:99px; padding:5px 12px; }
+  h2 { font-size:18px; font-weight:700; margin:44px 0 6px; }
+  .h2sub { color:var(--ink-2); font-size:13px; margin-bottom:18px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:24px; max-width:1200px; }
+  .panel { border-radius:16px; overflow:hidden; border:1px solid var(--line); background:var(--card); box-shadow:0 1px 3px rgba(0,0,0,.05); }
+  .panel-head { display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid var(--line); font-size:13px; font-weight:600; }
+  .badge-os { font-size:11px; font-weight:600; padding:3px 9px; border-radius:99px; }
+  .b-mac { background:#ececf1; color:#3a3a3c; } .b-win { background:#e7f0e9; color:#1f6b33; }
+
+  .wall { position:relative; min-height:430px; display:flex; align-items:center; justify-content:center; padding:30px 18px 46px; }
+  .mac-light { background:linear-gradient(135deg,#a8c8e8,#d8e6f3 45%,#f0d9c8); }
+  .mac-dark  { background:linear-gradient(135deg,#1c2a44,#2d3f63 50%,#4a3a56); }
+  .win-light { background:linear-gradient(135deg,#cfe3f5,#e8eff7 50%,#f3e9e0); }
+  .win-dark  { background:linear-gradient(135deg,#14202e,#1f3245 55%,#3a2a3e); }
+
+  /* 假系统栏:mac 顶栏 / win 底栏 */
+  .sysbar { position:absolute; left:0; right:0; display:flex; align-items:center; z-index:1; }
+  .sysbar.mac { top:0; height:26px; justify-content:flex-end; gap:14px; padding:0 14px; font-size:12px; }
+  .sysbar.win { bottom:0; height:44px; justify-content:center; gap:10px; }
+  .mac-dark .sysbar.mac { color:rgba(255,255,255,.85); } .mac-light .sysbar.mac { color:rgba(0,0,0,.75); }
+  .win-light .sysbar.win { background:rgba(255,255,255,.55); box-shadow:0 -1px 0 rgba(0,0,0,.06); }
+  .win-dark  .sysbar.win { background:rgba(255,255,255,.06); box-shadow:0 -1px 0 rgba(255,255,255,.08); }
+  .tb-icon { width:16px; height:16px; border-radius:4px; }
+  .tray-on { outline:1.5px solid var(--accent); outline-offset:2px; border-radius:4.5px; }
+  .mac-light .tb-icon, .win-light .tb-icon { background:rgba(0,0,0,.15); }
+  .mac-dark  .tb-icon, .win-dark  .tb-icon { background:rgba(255,255,255,.25); }
+  .tb-app { width:22px; height:22px; border-radius:5px; background:rgba(120,120,128,.25); }
+
+  /* ---------- 弹出窗主体 ---------- */
+  .popup { position:relative; z-index:2; width:320px; border-radius:13px; overflow:hidden;
+           font-size:13px; box-shadow:0 14px 46px rgba(0,0,0,.30), 0 2px 10px rgba(0,0,0,.14); }
+  .mac-theme { font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;
+    background:rgba(246,246,248,.84); backdrop-filter:blur(28px) saturate(1.6); border:.5px solid rgba(0,0,0,.18); color:#1d1d1f; }
+  .win-theme { font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif; border-radius:8px;
+    background:rgba(248,248,248,.95); backdrop-filter:blur(24px); border:1px solid rgba(0,0,0,.08); color:#1a1a1a; }
+  .dark.mac-theme { background:rgba(38,38,40,.78); border-color:rgba(255,255,255,.14); color:#f2f2f4; }
+  .dark.win-theme { background:rgba(44,44,46,.96); border-color:rgba(255,255,255,.09); color:#f3f3f3; }
+
+  .ph { display:flex; align-items:center; justify-content:space-between; padding:12px 14px 4px; }
+  .ph .t { font-weight:600; font-size:13.5px; }
+  .ph .t small { font-weight:400; opacity:.55; margin-left:6px; font-size:12px; }
+  .chip { font-size:11px; font-weight:600; padding:2.5px 9px; border-radius:99px;
+          background:rgba(120,120,128,.14); opacity:.8; }
+  .legend { display:flex; gap:14px; padding:6px 14px 2px; font-size:12px; opacity:.92; font-variant-numeric:tabular-nums; }
+  .legend .k { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; }
+  .k.up { background:var(--up); } .k.down { background:var(--down); }
+  .legend b { font-weight:600; }
+  canvas.chart { display:block; width:292px; height:138px; margin:6px auto 4px; }
+  .pf { display:flex; gap:8px; padding:8px 12px 12px; }
+  .pf button { flex:1; height:30px; border-radius:7px; border:none; font-size:12.5px; font-weight:500; cursor:default;
+    font-family:inherit; background:rgba(120,120,128,.13); color:inherit; }
+  .dark .pf button { background:rgba(255,255,255,.10); }
+
+  .anchor-line { position:absolute; z-index:0; width:1.5px; background:var(--amber); opacity:.85; }
+
+  .legend-block { padding:14px 18px 18px; border-top:1px solid var(--line); display:grid; gap:8px; }
+  .legend-block div { display:flex; gap:10px; font-size:12.5px; color:#48484d; line-height:1.55; }
+  .legend-block b { color:var(--ink); font-weight:600; }
+  .n { flex:none; width:19px; height:19px; margin-top:1px; border-radius:50%; background:var(--amber); color:#fff;
+       font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .note { position:absolute; z-index:3; width:21px; height:21px; border-radius:50%; background:var(--amber); color:#fff;
+          font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; box-shadow:0 1px 4px rgba(0,0,0,.35); }
+</style>
+</head>
+<body>
+
+<h1>Hotaru 托盘弹出曲线窗 · 设计预览</h1>
+<p class="sub">
+  左键<b>单击托盘图标</b>在图标旁弹出无边框置顶小窗,展示全部节点<b>汇总上下行曲线</b>;失焦自动收起,Esc 关闭,再次单击切换显隐。<b>右键仍为原生菜单</b>,双击打开面板(不变)。
+  区间档位(5 分 / 15 分 / 1 小时 / 6 小时)在设置窗口配置;数据仅内存环形缓冲,固定保留 6 小时,重启即清空。
+</p>
+<div class="spec">
+  <span>尺寸 320 × ~252 CSS px</span><span>无边框 + 透明 + 圆角</span><span>置顶 · 不进任务栏</span>
+  <span>定位:图标上/下方自适应并夹紧屏幕</span><span>粒度 = 轮询间隔</span><span>零依赖 canvas 绘制</span>
+</div>
+
+<h2>macOS — 弹窗锚定在菜单栏图标下方</h2>
+<div class="grid">
+  <div class="panel">
+    <div class="panel-head">浅色 · 正常数据<span class="badge-os b-mac">macOS</span></div>
+    <div class="wall mac-light">
+      <div class="sysbar mac"><span>◎</span><span class="tb-icon"></span><span class="tb-icon tray-on"></span></div>
+      <div class="popup mac-theme">
+        <div class="ph"><span class="t">汇总<small>在线 2/3</small></span><span class="chip">15 分钟</span></div>
+        <div class="legend"><span><i class="k up"></i>上行 <b>13.1 MB/s</b></span><span><i class="k down"></i>下行 <b>46.4 MB/s</b></span></div>
+        <canvas class="chart" data-seed="7" data-dark="0"></canvas>
+        <div class="pf"><button>打开面板</button><button>设置…</button></div>
+      </div>
+      <div class="anchor-line" style="left:50%; top:26px; height:38px;"></div>
+      <span class="note" style="right:36px; top:52px;">1</span>
+      <span class="note" style="right:36px; top:240px;">2</span>
+      <span class="note" style="right:36px; bottom:110px;">3</span>
+    </div>
+    <div class="legend-block">
+      <div><span class="n">1</span><span><b>锚定</b>:窗口中心对准托盘图标 x,出现在图标下方(菜单栏在顶部);琥珀线示意锚点</span></div>
+      <div><span class="n">2</span><span><b>头部</b>:视图名 + 在线数;右侧「区间」徽标显示当前档位(区间在设置窗口配置)</span></div>
+      <div><span class="n">3</span><span><b>快捷操作</b>:打开面板 / 设置…;失焦或 Esc 关闭,不进任务栏</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">深色 · 1 小时档(平缓)<span class="badge-os b-mac">macOS</span></div>
+    <div class="wall mac-dark">
+      <div class="sysbar mac"><span>◎</span><span class="tb-icon"></span><span class="tb-icon tray-on"></span></div>
+      <div class="popup mac-theme dark">
+        <div class="ph"><span class="t">汇总<small>在线 2/3</small></span><span class="chip">1 小时</span></div>
+        <div class="legend"><span><i class="k up"></i>上行 <b>2.4 MB/s</b></span><span><i class="k down"></i>下行 <b>8.9 MB/s</b></span></div>
+        <canvas class="chart" data-seed="21" data-dark="1"></canvas>
+        <div class="pf"><button>打开面板</button><button>设置…</button></div>
+      </div>
+      <div class="anchor-line" style="left:50%; top:26px; height:38px;"></div>
+    </div>
+    <div class="legend-block">
+      <div><span class="n">4</span><span>深浅色跟随系统;毛玻璃材质与原生菜单一致</span></div>
+      <div><span class="n">5</span><span>y 轴按 1/2/5×10ⁿ 取整自动缩放;区间越大曲线越平缓、刻度变稀</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>Windows 11 — 弹窗锚定在任务栏图标上方</h2>
+<div class="grid">
+  <div class="panel">
+    <div class="panel-head">浅色<span class="badge-os b-win">Windows 11</span></div>
+    <div class="wall win-light">
+      <div class="popup win-theme">
+        <div class="ph"><span class="t">汇总<small>在线 2/3</small></span><span class="chip">15 分钟</span></div>
+        <div class="legend"><span><i class="k up"></i>上行 <b>13.1 MB/s</b></span><span><i class="k down"></i>下行 <b>46.4 MB/s</b></span></div>
+        <canvas class="chart" data-seed="7" data-dark="0"></canvas>
+        <div class="pf"><button>打开面板</button><button>设置…</button></div>
+      </div>
+      <div class="anchor-line" style="left:50%; bottom:44px; height:36px;"></div>
+      <div class="sysbar win"><span class="tb-app"></span><span class="tb-app"></span><span class="tb-icon tray-on"></span><span class="tb-app"></span><span class="tb-app"></span></div>
+      <span class="note" style="right:36px; top:56px;">6</span>
+    </div>
+    <div class="legend-block">
+      <div><span class="n">6</span><span>Windows:弹窗出现在图标<b>上方</b>(任务栏在底部),8px 圆角 + 亚克力质感,与 Win11 上下文菜单同语言</span></div>
+      <div><span class="n">7</span><span>左键单击=弹窗(Windows 托盘惯例),右键=原生菜单,双击=面板</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">深色 · 刚启动(数据不足)<span class="badge-os b-win">Windows 11</span></div>
+    <div class="wall win-dark">
+      <div class="popup win-theme dark">
+        <div class="ph"><span class="t">汇总<small>在线 2/3</small></span><span class="chip">15 分钟</span></div>
+        <div class="legend"><span><i class="k up"></i>上行 <b>—</b></span><span><i class="k down"></i>下行 <b>—</b></span></div>
+        <canvas class="chart" data-seed="empty" data-dark="1"></canvas>
+        <div class="pf"><button>打开面板</button><button>设置…</button></div>
+      </div>
+      <div class="anchor-line" style="left:50%; bottom:44px; height:36px;"></div>
+      <div class="sysbar win"><span class="tb-app"></span><span class="tb-app"></span><span class="tb-icon tray-on"></span><span class="tb-app"></span><span class="tb-app"></span></div>
+    </div>
+    <div class="legend-block">
+      <div><span class="n">8</span><span>空态:启动不足一个区间时,曲线区显示「正在积累数据…」并随采样逐步填充;重启后历史清空(仅内存)</span></div>
+      <div><span class="n">9</span><span>后端离线时头部变为「⚠ 后端不可达」,曲线冻结在最后已知值,恢复后继续</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function lcg(s){ s>>>=0; return function(){ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
+function fmt(v){ if(v>=1048576) return (v/1048576).toFixed(1)+'M'; if(v>=1024) return (v/1024).toFixed(0)+'K'; return v.toFixed(0); }
+function niceCeil(v){ var e=Math.pow(10,Math.floor(Math.log10(v||1))); var m=v/e;
+  return (m<=1?1:m<=2?2:m<=5?5:10)*e; }
+
+function genSeries(seed, n, base, spike){
+  var r=lcg(seed), a=[], v=base;
+  for(var i=0;i<n;i++){
+    v=Math.max(0, v + (r()-0.5)*base*0.7);
+    if(r()>0.93) v*=(2+r()*3);
+    v=Math.min(v, base*spike); a.push(v);
+  } return a;
+}
+
+function draw(cv){
+  var dark = cv.dataset.dark==='1', seed = cv.dataset.seed;
+  var dpr = window.devicePixelRatio||1, W=292, H=138;
+  cv.width=W*dpr; cv.height=H*dpr;
+  var ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
+  var padL=40, padR=8, padT=8, padB=18, pw=W-padL-padR, ph=H-padT-padB;
+
+  var txt = dark?'rgba(255,255,255,.45)':'rgba(0,0,0,.4)';
+  var grid = dark?'rgba(255,255,255,.10)':'rgba(0,0,0,.08)';
+
+  if(seed==='empty'){
+    ctx.strokeStyle=grid; ctx.lineWidth=1;
+    for(var g=0;g<3;g++){ var y=padT+ph*g/2; ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke(); }
+    ctx.fillStyle=txt; ctx.font='12px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('正在积累数据…', W/2, padT+ph/2-6);
+    ctx.font='10px sans-serif';
+    ctx.fillText('现在', W-padR-14, H-6);
+    return;
+  }
+
+  var hours = seed==='21';
+  var n = 60;
+  var up = genSeries(+seed*3+1, n, hours? 0.18:1.1, 2.2);
+  var down = genSeries(+seed*7+3, n, hours? 0.5:3.6, 2.4);
+  var max = niceCeil(Math.max.apply(null, up.concat(down))*1.12);
+
+  function pts(a){ var out=[]; for(var i=0;i<a.length;i++){ out.push([padL+pw*i/(n-1), padT+ph*(1-a[i]/max)]); } return out; }
+  function smooth(c, p){ c.moveTo(p[0][0],p[0][1]);
+    for(var i=1;i<p.length-1;i++){ var mx=(p[i][0]+p[i+1][0])/2, my=(p[i][1]+p[i+1][1])/2; c.quadraticCurveTo(p[i][0],p[i][1],mx,my); }
+    c.lineTo(p[p.length-1][0],p[p.length-1][1]); }
+
+  ctx.font='9.5px sans-serif'; ctx.textAlign='right'; ctx.lineWidth=1;
+  for(var g=0;g<4;g++){
+    var y=padT+ph*g/3;
+    ctx.strokeStyle=grid; ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+    ctx.fillStyle=txt; ctx.fillText(fmt(max*(1-g/3)), padL-6, y+3);
+  }
+  ctx.textAlign='center'; ctx.fillStyle=txt; ctx.font='9.5px sans-serif';
+  var span = hours? ['−60m','−40m','−20m'] : ['−15m','−10m','−5m'];
+  for(var x=0;x<3;x++){ ctx.fillText(span[x], padL+pw*(x+1)/4, H-5); }
+  ctx.fillText('现在', W-padR-12, H-5);
+
+  [[down,'52,211,153'],[up,'56,189,248']].forEach(function(s){
+    var p=pts(s[0]);
+    var fill=ctx.createLinearGradient(0,padT,0,padT+ph);
+    fill.addColorStop(0,'rgba('+s[1]+',.28)'); fill.addColorStop(1,'rgba('+s[1]+',0)');
+    ctx.beginPath(); smooth(ctx,p);
+    ctx.lineTo(p[p.length-1][0],padT+ph); ctx.lineTo(p[0][0],padT+ph); ctx.closePath();
+    ctx.fillStyle=fill; ctx.fill();
+    ctx.beginPath(); smooth(ctx,p);
+    ctx.strokeStyle='rgb('+s[1]+')'; ctx.lineWidth=1.6; ctx.lineJoin='round'; ctx.stroke();
+  });
+}
+document.querySelectorAll('canvas.chart').forEach(draw);
+</script>
+</body>
+</html>

@@ -36,24 +36,57 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "main" || window.label() == "chart" {
                     // Closing the panel hides it; the tray keeps running.
+                    // The chart popover is hide-only (it has no decorations).
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
+            WindowEvent::Focused(false) => {
+                // The chart popover dismisses itself on focus loss — unless
+                // the user pinned it open. The hide is delayed so a brief
+                // focus flicker (the shell re-asserting after a tray click)
+                // does not instantly close a freshly opened popover.
+                if window.label() == "chart" {
+                    let handle = window.app_handle();
+                    let pinned = handle
+                        .state::<AppState>()
+                        .chart_pinned
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if pinned {
+                        return;
+                    }
+                    let win = window.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        if win.is_visible().unwrap_or(false) && !win.is_focused().unwrap_or(true) {
+                            *win
+                                .app_handle()
+                                .state::<AppState>()
+                                .chart_hidden_at
+                                .lock() = Some(std::time::Instant::now());
+                            let _ = win.hide();
+                        }
+                    });
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::save_settings,
             commands::get_snapshot,
+            commands::get_net_history,
             commands::test_connection,
             commands::get_autostart,
             commands::set_autostart,
             commands::open_panel_cmd,
             commands::open_settings_cmd,
+            commands::get_chart_pinned,
+            commands::set_chart_pinned,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hotaru");

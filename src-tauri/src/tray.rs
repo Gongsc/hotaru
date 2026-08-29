@@ -1,13 +1,13 @@
 use parking_lot::{const_mutex, Mutex};
-use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_autostart::ManagerExt as _;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
 
 use crate::models::{
-    aggregate, fmt_bytes, fmt_rate, icon_state, pct, scoped_nodes, Aggregate, IconState,
-    MonitorSnapshot, NodeSnapshot, Severity, Settings, TrayMode,
+    aggregate, fmt_rate, icon_state, scoped_nodes, Aggregate, IconState,
+    MonitorSnapshot, Severity,
 };
 use crate::state::AppState;
 
@@ -18,12 +18,7 @@ pub const TRAY_ID: &str = "hotaru-main-tray";
 // ---------------------------------------------------------------------------
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let cache = {
-        let st = app.state::<AppState>();
-        let settings = st.settings.read().clone();
-        let snap = st.snapshot.read().clone();
-        MenuCache::build(app, &settings, &snap)?
-    };
+    let cache = MenuCache::build(app)?;
     let menu = cache.menu.clone();
     *MENU_CACHE.lock() = Some(cache);
     TrayIconBuilder::with_id(TRAY_ID)
@@ -34,11 +29,33 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         ))
         .tooltip("Hotaru · 正在连接后端…")
         .menu(&menu)
+        .show_menu_on_left_click(false)
         .on_menu_event(on_menu_event)
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } = event {
+        .on_tray_icon_event(|tray, event| match event {
+            // Left click opens the chart popover anchored to the icon; right
+            // click keeps the native menu, double click opens the panel.
+            // Windows delivers a Click event for press AND release — act on
+            // release only, or one physical click toggles the popover twice.
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } => {
+                let (px, py) = match rect.position {
+                    tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+                    tauri::Position::Logical(p) => (p.x, p.y),
+                };
+                let (sw, sh) = match rect.size {
+                    tauri::Size::Physical(s) => (s.width as f64, s.height as f64),
+                    tauri::Size::Logical(s) => (s.width, s.height),
+                };
+                crate::windows::open_chart(tray.app_handle(), (px, py, sw, sh));
+            }
+            TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
                 crate::windows::open_panel(tray.app_handle());
             }
+            _ => {}
         })
         .build(app)?;
     Ok(())
@@ -71,96 +88,27 @@ pub fn apply(app: &AppHandle) {
         let _ = tray.set_title(None::<String>);
     }
 
-    if let Err(e) = sync_menu(app, &tray, &settings, &snap) {
-        log::error!("更新托盘菜单失败: {e}");
-    }
+    sync_menu(app);
 }
 
 // ---------------------------------------------------------------------------
 // Menu
 // ---------------------------------------------------------------------------
 
-/// Cached tray menu with handles to its dynamic items.
-///
-/// The native menu must NOT be rebuilt on every snapshot tick: swapping the
-/// menu underneath an open popup (Windows recycles the internal item ids of
-/// destroyed menus) makes the next click resolve to the wrong item — in the
-/// worst case "退出", so the app appeared to quit on its own. Rebuild only
-/// when the menu structure changes; patch item texts / check states in place
-/// otherwise.
+/// Cached tray menu, built once and only patched in place afterwards (the
+/// autostart check state). Swapping the menu on every tick makes Windows
+/// recycle the internal item ids and clicks can hit the wrong item.
 struct MenuCache {
-    structure_key: String,
     menu: Menu<Wry>,
-    header: MenuItem<Wry>,
-    node_lines: Vec<(String, MenuItem<Wry>)>,
-    mode_aggregate: CheckMenuItem<Wry>,
-    node_checks: Vec<(String, CheckMenuItem<Wry>)>,
     autostart: CheckMenuItem<Wry>,
 }
 
 static MENU_CACHE: Mutex<Option<MenuCache>> = const_mutex(None);
 
-/// Everything that requires creating/destroying menu items — and therefore a
-/// full menu rebuild — when it changes. Node data (names, load values) is not
-/// part of it: those are updated in place via `set_text`.
-fn structure_key(settings: &Settings, nodes: &[NodeSnapshot]) -> String {
-    let mut uuids: Vec<&str> = nodes.iter().map(|n| n.uuid.as_str()).collect();
-    uuids.sort_unstable();
-    format!(
-        "{:?}|{}|{}",
-        settings.tray_mode,
-        settings.pinned_uuid,
-        uuids.join(","),
-    )
-}
-
 impl MenuCache {
-    fn build(app: &AppHandle, settings: &Settings, snap: &MonitorSnapshot) -> tauri::Result<Self> {
-        let scope = scoped_nodes(settings, &snap.nodes);
-        let agg = aggregate(&scope);
-
-        let header = MenuItem::with_id(
-            app,
-            "header",
-            header_text(snap, &agg),
-            false,
-            None::<&str>,
-        )?;
-
-        let mut node_lines = Vec::new();
-        for n in &scope {
-            node_lines.push((
-                n.uuid.clone(),
-                MenuItem::with_id(app, format!("info-{}", n.uuid), node_line(n), false, None::<&str>)?,
-            ));
-        }
-
+    fn build(app: &AppHandle) -> tauri::Result<Self> {
         let open_panel = MenuItem::with_id(app, "open-panel", "打开面板", true, None::<&str>)?;
         let open_settings = MenuItem::with_id(app, "open-settings", "设置…", true, None::<&str>)?;
-
-        let mode = Submenu::with_id(app, "mode-sub", "托盘数据源", true)?;
-        let mode_aggregate = CheckMenuItem::with_id(
-            app,
-            "mode-aggregate",
-            "汇总全部节点",
-            true,
-            settings.tray_mode == TrayMode::Aggregate,
-            None::<&str>,
-        )?;
-        mode.append(&mode_aggregate)?;
-        let mut node_checks = Vec::new();
-        for n in &scope {
-            let item = CheckMenuItem::with_id(
-                app,
-                format!("node-{}", n.uuid),
-                format!("关注：{}", truncate(&n.name, 20)),
-                true,
-                settings.tray_mode == TrayMode::Node && settings.pinned_uuid == n.uuid,
-                None::<&str>,
-            )?;
-            mode.append(&item)?;
-            node_checks.push((n.uuid.clone(), item));
-        }
 
         let autostart = CheckMenuItem::with_id(
             app,
@@ -172,73 +120,24 @@ impl MenuCache {
         )?;
         let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
-        let sep_header = PredefinedMenuItem::separator(app)?;
-        let sep_nodes = PredefinedMenuItem::separator(app)?;
-        let sep_actions = PredefinedMenuItem::separator(app)?;
         let sep_bottom = PredefinedMenuItem::separator(app)?;
 
         let menu = Menu::new(app)?;
-        menu.append(&header)?;
-        menu.append(&sep_header)?;
-        for (_, item) in &node_lines {
-            menu.append(item)?;
-        }
-        menu.append(&sep_nodes)?;
         menu.append(&open_panel)?;
         menu.append(&open_settings)?;
-        menu.append(&sep_actions)?;
-        menu.append(&mode)?;
         menu.append(&autostart)?;
         menu.append(&sep_bottom)?;
         menu.append(&quit)?;
 
-        Ok(Self {
-            structure_key: structure_key(settings, &snap.nodes),
-            menu,
-            header,
-            node_lines,
-            mode_aggregate,
-            node_checks,
-            autostart,
-        })
+        Ok(Self { menu, autostart })
     }
 }
 
-fn sync_menu(
-    app: &AppHandle,
-    tray: &TrayIcon<Wry>,
-    settings: &Settings,
-    snap: &MonitorSnapshot,
-) -> tauri::Result<()> {
-    let key = structure_key(settings, &snap.nodes);
+fn sync_menu(app: &AppHandle) {
     let mut cache = MENU_CACHE.lock();
-
     if let Some(c) = cache.as_mut() {
-        if c.structure_key == key {
-            let scope = scoped_nodes(settings, &snap.nodes);
-            let agg = aggregate(&scope);
-            let _ = c.header.set_text(header_text(snap, &agg));
-            for n in &scope {
-                if let Some((_, item)) = c.node_lines.iter().find(|(u, _)| u == &n.uuid) {
-                    let _ = item.set_text(node_line(n));
-                }
-                if let Some((_, chk)) = c.node_checks.iter().find(|(u, _)| u == &n.uuid) {
-                    let _ = chk.set_text(format!("关注：{}", truncate(&n.name, 20)));
-                    let _ = chk.set_checked(
-                        settings.tray_mode == TrayMode::Node && settings.pinned_uuid == n.uuid,
-                    );
-                }
-            }
-            let _ = c.mode_aggregate.set_checked(settings.tray_mode == TrayMode::Aggregate);
-            let _ = c.autostart.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
-            return Ok(());
-        }
+        let _ = c.autostart.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
     }
-
-    let fresh = MenuCache::build(app, settings, snap)?;
-    let _ = tray.set_menu(Some(fresh.menu.clone()));
-    *cache = Some(fresh);
-    Ok(())
 }
 
 fn on_menu_event(app: &AppHandle, event: MenuEvent) {
@@ -247,10 +146,6 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         "quit" => app.exit(0),
         "open-panel" => crate::windows::open_panel(app),
         "open-settings" => crate::windows::open_settings(app),
-        "mode-aggregate" => {
-            app.state::<AppState>().settings.write().tray_mode = TrayMode::Aggregate;
-            refresh(app);
-        }
         "autostart" => {
             let launcher = app.autolaunch();
             let result = if launcher.is_enabled().unwrap_or(false) {
@@ -263,38 +158,13 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
             }
             refresh(app);
         }
-        other => {
-            if let Some(uuid) = other.strip_prefix("node-") {
-                let st = app.state::<AppState>();
-                {
-                    let mut s = st.settings.write();
-                    s.tray_mode = TrayMode::Node;
-                    s.pinned_uuid = uuid.to_string();
-                }
-                refresh(app);
-            }
-        }
+        _ => {}
     }
 }
 
 fn refresh(app: &AppHandle) {
     let a = app.clone();
     let _ = app.run_on_main_thread(move || apply(&a));
-}
-
-fn header_text(snap: &MonitorSnapshot, agg: &Aggregate) -> String {
-    if !snap.backend_ok {
-        return format!("⚠ {}", snap.error.as_deref().unwrap_or("后端不可达"));
-    }
-    format!(
-        "在线 {}/{} · CPU {:.0}% · 内存 {:.0}% · ↑{} ↓{}",
-        agg.online,
-        agg.total,
-        agg.cpu,
-        agg.mem_pct,
-        fmt_rate(agg.net_up),
-        fmt_rate(agg.net_down)
-    )
 }
 
 fn tooltip_text(snap: &MonitorSnapshot, agg: &Aggregate) -> String {
@@ -316,23 +186,6 @@ fn tooltip_text(snap: &MonitorSnapshot, agg: &Aggregate) -> String {
 #[cfg(target_os = "macos")]
 fn menu_bar_text(agg: &Aggregate) -> String {
     format!("↑{} ↓{}", fmt_rate(agg.net_up), fmt_rate(agg.net_down))
-}
-
-fn node_line(n: &NodeSnapshot) -> String {
-    if !n.online {
-        return format!("⚠ {} · 离线", truncate(&n.name, 18));
-    }
-    let mem = pct(n.ram_used, n.ram_total)
-        .map(|p| format!("内存 {:.0}%", p))
-        .unwrap_or_else(|| format!("内存 {}", fmt_bytes(n.ram_used)));
-    format!(
-        "{} · CPU {:.0}% · {} · ↑{} ↓{}",
-        truncate(&n.name, 18),
-        n.cpu_usage,
-        mem,
-        fmt_rate(n.net_up),
-        fmt_rate(n.net_down)
-    )
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {

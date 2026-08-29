@@ -153,6 +153,20 @@
   </section>
 
   <section>
+    <h2>图表</h2>
+    <label class="field">
+      <span>曲线显示区间（托盘左键弹窗）</span>
+      <select id="chartRange">
+        <option value="300">5 分钟</option>
+        <option value="900">15 分钟</option>
+        <option value="3600">1 小时</option>
+        <option value="21600">6 小时</option>
+      </select>
+    </label>
+    <p class="hint">汇总上下行速率的历史曲线。数据仅保存在内存中（固定保留 6 小时），重启应用后清空；曲线时间粒度与刷新间隔一致。</p>
+  </section>
+
+  <section>
     <h2>实时状态</h2>
     <div class="status-head">
       <span><span class="dot err" id="statusDot"></span> <span id="statusText">加载中…</span></span>
@@ -212,6 +226,7 @@ function collect() {
     cpu_warn_pct: Math.max(1, Math.min(100, Number($('cpuWarn').value) || 80)),
     mem_warn_pct: Math.max(1, Math.min(100, Number($('memWarn').value) || 85)),
     accept_invalid_certs: $('acceptInvalid').checked,
+    chart_range_secs: Number($('chartRange').value) || 900,
   };
 }
 
@@ -223,6 +238,8 @@ function fillSettings(s) {
   $('memWarn').value = s.mem_warn_pct ?? 85;
   $('showTitle').checked = !!s.show_menu_bar_text;
   $('acceptInvalid').checked = !!s.accept_invalid_certs;
+  $('chartRange').value = String(s.chart_range_secs ?? 900);
+  if ($('chartRange').selectedIndex === -1) $('chartRange').value = '900';
   if (s.tray_mode === 'node') { $('modeNode').checked = true; } else { $('modeAggregate').checked = true; }
 }
 

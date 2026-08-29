@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt as _;
 
-use crate::models::{normalize_base, ClientInfo, Envelope, MonitorSnapshot, Settings};
+use crate::models::{normalize_base, now_ms, ClientInfo, Envelope, MonitorSnapshot, NetPoint, Settings};
 use crate::settings;
 use crate::state::AppState;
 use crate::windows;
@@ -31,6 +32,65 @@ pub fn save_settings(
 #[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> MonitorSnapshot {
     state.snapshot.read().clone()
+}
+
+/// Target point count per series returned by `get_net_history`; larger
+/// histories are bucket-averaged so the JSON stays small.
+const HISTORY_MAX_SERIES_POINTS: usize = 720;
+
+#[derive(Serialize)]
+pub struct NetHistoryPayload {
+    pub aggregate: Vec<NetPoint>,
+    pub nodes: BTreeMap<String, Vec<NetPoint>>,
+}
+
+#[tauri::command]
+pub fn get_net_history(state: State<'_, AppState>, range_secs: u64) -> NetHistoryPayload {
+    let range_secs = range_secs.clamp(60, crate::state::HISTORY_RETENTION_MS / 1000);
+    let since = now_ms().saturating_sub(range_secs * 1000);
+    let frames = state.net_history.since(since);
+
+    let mut nodes: BTreeMap<String, Vec<NetPoint>> = BTreeMap::new();
+    for f in &frames {
+        for (uuid, up, down) in &f.nodes {
+            nodes.entry(uuid.clone()).or_default().push(NetPoint {
+                t: f.t,
+                up: *up,
+                down: *down,
+            });
+        }
+    }
+
+    NetHistoryPayload {
+        aggregate: downsample(&frames.iter().map(|f| NetPoint {
+            t: f.t,
+            up: f.nodes.iter().map(|(_, up, _)| up).sum(),
+            down: f.nodes.iter().map(|(_, _, down)| down).sum(),
+        }).collect::<Vec<_>>()),
+        nodes: nodes
+            .into_iter()
+            .map(|(uuid, pts)| (uuid, downsample(&pts)))
+            .collect(),
+    }
+}
+
+/// Bucket-average a series down to at most `HISTORY_MAX_SERIES_POINTS` points.
+fn downsample(points: &[NetPoint]) -> Vec<NetPoint> {
+    if points.len() <= HISTORY_MAX_SERIES_POINTS {
+        return points.to_vec();
+    }
+    let step = points.len().div_ceil(HISTORY_MAX_SERIES_POINTS);
+    points
+        .chunks(step)
+        .map(|chunk| {
+            let n = chunk.len() as f64;
+            NetPoint {
+                t: chunk[chunk.len() / 2].t,
+                up: chunk.iter().map(|p| p.up).sum::<f64>() / n,
+                down: chunk.iter().map(|p| p.down).sum::<f64>() / n,
+            }
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -117,4 +177,44 @@ pub fn open_panel_cmd(app: AppHandle) {
 #[tauri::command]
 pub fn open_settings_cmd(app: AppHandle) {
     windows::open_settings(&app);
+}
+
+#[tauri::command]
+pub fn set_chart_pinned(state: State<'_, AppState>, pinned: bool) {
+    state
+        .chart_pinned
+        .store(pinned, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[tauri::command]
+pub fn get_chart_pinned(state: State<'_, AppState>) -> bool {
+    state
+        .chart_pinned
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pt(t: u64, up: f64) -> NetPoint {
+        NetPoint { t, up, down: up }
+    }
+
+    #[test]
+    fn downsample_short_series_unchanged() {
+        let pts: Vec<NetPoint> = (0..100).map(|i| pt(i * 1000, i as f64)).collect();
+        assert_eq!(downsample(&pts), pts);
+    }
+
+    #[test]
+    fn downsample_buckets_average() {
+        let pts: Vec<NetPoint> = (0..1000).map(|i| pt(i * 1000, i as f64)).collect();
+        let out = downsample(&pts);
+        assert!(out.len() <= HISTORY_MAX_SERIES_POINTS);
+        // 1000 -> step 2 -> 500 buckets averaging pairs (i, i+1)
+        assert_eq!(out.len(), 500);
+        assert!((out[0].up - 0.5).abs() < 1e-9);
+        assert!((out[1].up - 2.5).abs() < 1e-9);
+    }
 }

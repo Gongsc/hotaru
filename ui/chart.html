@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Hotaru</title>
+<style>
+  :root {
+    --panel: rgba(246, 246, 248, .84);
+    --border: rgba(0, 0, 0, .18);
+    --ink: #1d1d1f;
+    --ink-2: rgba(0, 0, 0, .42);
+    --grid: rgba(0, 0, 0, .08);
+    --btn: rgba(120, 120, 128, .13);
+    --chip: rgba(120, 120, 128, .14);
+    --up: #38bdf8;
+    --down: #34d399;
+    --warn: #f87171;
+    --off: #9d9da1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --panel: rgba(38, 38, 40, .78);
+      --border: rgba(255, 255, 255, .14);
+      --ink: #f2f2f4;
+      --ink-2: rgba(255, 255, 255, .45);
+      --grid: rgba(255, 255, 255, .10);
+      --btn: rgba(255, 255, 255, .10);
+      --chip: rgba(255, 255, 255, .12);
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: transparent; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    font-size: 13px; color: var(--ink);
+    -webkit-user-select: none; user-select: none;
+    width: 320px; overflow: hidden;
+  }
+  #panel {
+    width: 320px; height: 100%;
+    background: var(--panel);
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border: .5px solid var(--border);
+    border-radius: 13px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .ph { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 4px; cursor: move; user-select: none; -webkit-user-select: none; }
+  .ph .left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .pin { flex: none; width: 24px; height: 24px; border: none; border-radius: 6px; background: transparent;
+         cursor: pointer; color: var(--ink-2); display: flex; align-items: center; justify-content: center; padding: 0; }
+  .pin:hover { background: var(--btn); }
+  .pin.active { color: var(--down); }
+  .pin svg { width: 13px; height: 13px; }
+  .ph .t { font-weight: 600; font-size: 13.5px; }
+  .ph .t small { font-weight: 400; opacity: .55; margin-left: 6px; font-size: 12px; }
+  .chip { font-size: 11px; font-weight: 600; padding: 2.5px 9px; border-radius: 99px; background: var(--chip); opacity: .8; }
+  .legend { display: flex; gap: 14px; padding: 6px 14px 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .legend .k { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .k.up { background: var(--up); } .k.down { background: var(--down); }
+  .legend b { font-weight: 600; }
+  canvas#chart { display: block; width: 292px; height: 112px; margin: 6px auto 2px; flex: none; }
+
+  .sec-label { font-size: 11px; font-weight: 600; color: var(--ink-2); letter-spacing: .05em; padding: 6px 14px 4px; flex: none; }
+  .nodes { flex: 1; min-height: 0; overflow: hidden; padding: 0 12px 6px; }
+  .nodes .empty { color: var(--ink-2); font-size: 12px; text-align: center; padding: 18px 0; }
+
+  /* 数据源单选行（与托盘「托盘数据源」同步） */
+  .nrow { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 8px;
+          border-radius: 7px; cursor: pointer; }
+  .nrow:hover { background: var(--btn); }
+  .radio { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid var(--ink-2);
+           flex: none; position: relative; }
+  .nrow.sel .radio { border-color: var(--down); }
+  .nrow.sel .radio::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: var(--down); }
+  .nrow .name { flex: 1; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--down); flex: none; }
+  .nrow .dot.off { background: var(--off); }
+  .nrow .chev { flex: none; width: 14px; text-align: center; font-size: 10px; color: var(--ink-2);
+                transition: transform .15s; }
+  .card.open > .nrow .chev { transform: rotate(90deg); }
+
+  .card { margin-bottom: 2px; }
+  .nbody { display: none; padding: 2px 8px 8px; }
+  .card.open > .nbody { display: block; }
+  .nbody .rates { font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; padding: 2px 0 3px; }
+  canvas.mini { display: block; width: 100%; height: 54px; }
+  .bar-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-2); margin-top: 6px; }
+  .bar-row .lbl { width: 26px; flex: none; }
+  .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 3px; background: var(--up); transition: width .4s; }
+  .bar.mem i { background: var(--down); }
+  .bar.hot i { background: var(--warn); }
+  .bar-row .pv { width: 38px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .pf { display: flex; gap: 8px; padding: 8px 12px 12px; flex: none; }
+  .pf button {
+    flex: 1; height: 30px; border-radius: 7px; border: none; cursor: pointer;
+    font-size: 12.5px; font-weight: 500; font-family: inherit;
+    background: var(--btn); color: var(--ink);
+  }
+  .pf button:active { opacity: .7; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="ph" id="header">
+    <span class="left">
+      <button class="pin" id="btn-pin" title="固定显示（失焦不关闭）" aria-label="固定显示">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 17v5"/>
+          <path d="M9 4h6l1 6 2.5 2.5a1 1 0 0 1-.7 1.5H6.2a1 1 0 0 1-.7-1.5L8 10z"/>
+        </svg>
+      </button>
+      <span class="t" id="title">汇总<small>…</small></span>
+    </span>
+    <span class="chip" id="range-chip">…</span>
+  </div>
+  <div class="legend">
+    <span><i class="k up"></i>上行 <b id="up-now">—</b></span>
+    <span><i class="k down"></i>下行 <b id="down-now">—</b></span>
+  </div>
+  <canvas id="chart"></canvas>
+  <div class="sec-label">节点 · 数据源</div>
+  <div class="nodes" id="nodes"><div class="empty">等待数据…</div></div>
+  <div class="pf">
+    <button id="btn-panel">打开面板</button>
+    <button id="btn-settings">设置…</button>
+  </div>
+</div>
+
+<script>
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const win = window.__TAURI__.window.getCurrentWindow();
+const { LogicalSize } = window.__TAURI__.dpi;
+
+const RANGE_LABELS = { 300: '5 分钟', 900: '15 分钟', 3600: '1 小时', 21600: '6 小时' };
+const FRONT_BUFFER_MS = 6 * 3600 * 1000;
+const MIN_POPOVER_H = 300, MAX_POPOVER_H = 900;
+
+let rangeSecs = 900;
+let cpuWarnPct = 80, memWarnPct = 85;
+let settingsCache = null;
+let points = [];                 // aggregate [{t, up, down}]
+let nodeSeries = new Map();      // uuid -> [{t, up, down}]
+let nodeMeta = new Map();        // uuid -> {name, online, cpu, memPct}
+let traySource = { mode: 'aggregate', pinned: '' };
+let expandedUuid = null;         // accordion: which node card is open
+let lastDraw = 0;
+let backendOk = true;
+let onlineCount = null;
+let cardsBuilt = false;
+
+function fmtRate(bps) {
+  if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
+  if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
+  return bps.toFixed(0) + ' B/s';
+}
+
+function fmtAgo(ms) {
+  const m = ms / 60000;
+  if (m >= 60) return '-' + Math.round(m / 60) + 'h';
+  if (m >= 1) return '-' + Math.round(m) + 'm';
+  return '-' + Math.max(1, Math.round(ms / 1000)) + 's';
+}
+
+function fmtAxis(v) {
+  if (v >= 1048576) return (v / 1048576).toFixed(1) + 'M';
+  if (v >= 1024) return (v / 1024).toFixed(0) + 'K';
+  return v.toFixed(0);
+}
+
+function niceCeil(v) {
+  if (v <= 0) return 1024;
+  const e = Math.pow(10, Math.floor(Math.log10(v)));
+  const m = v / e;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * e;
+}
+
+function renderHeader() {
+  document.getElementById('title').innerHTML = backendOk
+    ? '汇总<small>在线 ' + (onlineCount == null ? '…' : onlineCount) + '</small>'
+    : '⚠ 后端不可达';
+  const last = points[points.length - 1];
+  document.getElementById('up-now').textContent = last ? fmtRate(last.up) : '—';
+  document.getElementById('down-now').textContent = last ? fmtRate(last.down) : '—';
+  document.getElementById('range-chip').textContent =
+    RANGE_LABELS[rangeSecs] || Math.round(rangeSecs / 60) + ' 分钟';
+}
+
+function bucketize(data, columns) {
+  if (data.length <= columns) return data;
+  const step = Math.ceil(data.length / columns);
+  const out = [];
+  for (let i = 0; i < data.length; i += step) {
+    let up = 0, down = 0, cnt = 0;
+    const end = Math.min(i + step, data.length);
+    for (let j = i; j < end; j++) {
+      up += data[j].up; down += data[j].down; cnt++;
+    }
+    out.push({ t: data[Math.floor((i + end - 1) / 2)].t, up: up / cnt, down: down / cnt });
+  }
+  return out;
+}
+
+function smoothPath(ctx, p, xOf) {
+  ctx.beginPath();
+  ctx.moveTo(xOf(p[0].t), p[0].y);
+  for (let i = 1; i < p.length - 1; i++) {
+    const mx = (xOf(p[i].t) + xOf(p[i + 1].t)) / 2;
+    const my = (p[i].y + p[i + 1].y) / 2;
+    ctx.quadraticCurveTo(xOf(p[i].t), p[i].y, mx, my);
+  }
+  ctx.lineTo(xOf(p[p.length - 1].t), p[p.length - 1].y);
+}
+
+function strokeSeries(ctx, data, xOf, yOf, padT, padH) {
+  [['52,211,153', 'down'], ['56,189,248', 'up']].forEach(([rgb, key]) => {
+    const p = data.map((d) => ({ t: d.t, y: yOf(d[key]) }));
+    smoothPath(ctx, p, xOf);
+    const fill = ctx.createLinearGradient(0, padT, 0, padT + padH);
+    fill.addColorStop(0, 'rgba(' + rgb + ',.28)');
+    fill.addColorStop(1, 'rgba(' + rgb + ',0)');
+    ctx.lineTo(xOf(p[p.length - 1].t), padT + padH);
+    ctx.lineTo(xOf(p[0].t), padT + padH);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    smoothPath(ctx, p, xOf);
+    ctx.strokeStyle = 'rgb(' + rgb + ')';
+    ctx.lineWidth = 1.6;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  });
+}
+
+function drawAggregate() {
+  const cv = document.getElementById('chart');
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || !H) return;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const txt = dark ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.4)';
+  const grid = dark ? 'rgba(255,255,255,.10)' : 'rgba(0,0,0,.08)';
+  const padL = 46, padR = 8, padT = 8, padB = 16, pw = W - padL - padR, ph = H - padT - padB;
+
+  const now = Date.now();
+  const start = now - rangeSecs * 1000;
+  const spanMs = rangeSecs * 1000;
+  const xOf = (t) => padL + pw * Math.min(1, Math.max(0, (t - start) / spanMs));
+
+  ctx.lineWidth = 1;
+  ctx.font = '9.5px -apple-system, "Segoe UI", sans-serif';
+
+  for (let g = 0; g < 4; g++) {
+    const y = padT + (ph * g) / 3;
+    ctx.strokeStyle = grid;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = txt;
+  for (let i = 1; i <= 3; i++) {
+    ctx.fillText(fmtAgo(spanMs - (spanMs * i) / 4), padL + (pw * i) / 4, H - 4);
+  }
+  ctx.fillText('现在', W - padR - 12, H - 4);
+
+  const visible = points.filter((p) => p.t >= start);
+  if (visible.length < 2) {
+    ctx.fillStyle = txt;
+    ctx.font = '12px -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('正在积累数据…', W / 2, padT + ph / 2 - 6);
+    return;
+  }
+
+  const data = bucketize(visible, Math.max(2, Math.floor(pw)));
+  const max = niceCeil(Math.max(...data.map((p) => Math.max(p.up, p.down))) * 1.12);
+  const yOf = (v) => padT + ph * (1 - Math.min(1, v / max));
+
+  ctx.textAlign = 'right';
+  for (let g = 0; g < 4; g++) {
+    ctx.fillStyle = txt;
+    ctx.fillText(fmtAxis(max * (1 - g / 3)), padL - 6, padT + (ph * g) / 3 + 3);
+  }
+
+  strokeSeries(ctx, data, xOf, yOf, padT, ph);
+}
+
+function drawMini(cv, series) {
+  if (!cv.clientWidth) return; // collapsed
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const grid = dark ? 'rgba(255,255,255,.10)' : 'rgba(0,0,0,.08)';
+  const txt = dark ? 'rgba(255,255,255,.4)' : 'rgba(0,0,0,.35)';
+  const padT = 4, padB = 4, padR = 2, padL = 2, pw = W - padL - padR, ph = H - padT - padB;
+
+  const now = Date.now();
+  const start = now - rangeSecs * 1000;
+  const spanMs = rangeSecs * 1000;
+  const xOf = (t) => padL + pw * Math.min(1, Math.max(0, (t - start) / spanMs));
+
+  ctx.lineWidth = 1;
+  for (let g = 0; g < 2; g++) {
+    const y = padT + (ph * g) / 1;
+    ctx.strokeStyle = grid;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+  }
+
+  const visible = (series || []).filter((p) => p.t >= start);
+  if (visible.length < 2) {
+    ctx.fillStyle = txt;
+    ctx.font = '10.5px -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('正在积累数据…', W / 2, padT + ph / 2 + 3);
+    return;
+  }
+  const data = bucketize(visible, Math.max(2, Math.floor(pw)));
+  const max = niceCeil(Math.max(...data.map((p) => Math.max(p.up, p.down))) * 1.12);
+  const yOf = (v) => padT + ph * (1 - Math.min(1, v / max));
+  strokeSeries(ctx, data, xOf, yOf, padT, ph);
+}
+
+// --- 数据源选择（与托盘「托盘数据源」同步） --------------------------------
+
+async function selectSource(mode, pinned) {
+  if (traySource.mode === mode && traySource.pinned === pinned) return;
+  const prev = traySource;
+  traySource = { mode, pinned };
+  if (mode === 'node' && pinned) expandedUuid = pinned;
+  renderNodes();
+  try {
+    let base = settingsCache;
+    if (!base) base = await invoke('get_settings');
+    settingsCache = await invoke('save_settings', {
+      settings: { ...base, tray_mode: mode, pinned_uuid: pinned },
+    });
+  } catch (e) {
+    traySource = prev; // revert on failure
+    renderNodes();
+  }
+}
+
+// --- 折叠节点列表 -----------------------------------------------------------
+
+let nodesKey = null;
+
+function nodesKeyOf() {
+  return [...nodeMeta.keys()].join(',') + '|' + traySource.mode + '|' +
+    traySource.pinned + '|' + expandedUuid;
+}
+
+// 结构变化（节点集/选择/展开）时整表重建；否则只做增量补丁
+function syncNodes() {
+  const key = nodesKeyOf();
+  if (key !== nodesKey) {
+    nodesKey = key;
+    buildNodes();
+  } else {
+    patchNodes();
+  }
+}
+
+function renderNodes() {
+  nodesKey = nodesKeyOf();
+  buildNodes();
+  patchNodes();
+}
+
+function buildNodes() {
+  const container = document.getElementById('nodes');
+  container.innerHTML = '';
+
+  // 数据源行：汇总全部节点
+  const modeRow = document.createElement('div');
+  modeRow.className = 'nrow' + (traySource.mode === 'aggregate' ? ' sel' : '');
+  modeRow.id = 'mode-row';
+  modeRow.innerHTML = '<span class="radio"></span><span class="name">汇总全部节点</span>';
+  modeRow.addEventListener('click', () => selectSource('aggregate', ''));
+  container.appendChild(modeRow);
+
+  const uuids = [...nodeMeta.keys()];
+  if (!uuids.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = '暂无节点';
+    container.appendChild(empty);
+    fitHeight();
+    return;
+  }
+
+  for (const uuid of uuids) {
+    const meta = nodeMeta.get(uuid);
+    const sel = traySource.mode === 'node' && traySource.pinned === uuid;
+    const open = expandedUuid === uuid;
+
+    const card = document.createElement('div');
+    card.className = 'card' + (open ? ' open' : '');
+
+    const row = document.createElement('div');
+    row.className = 'nrow' + (sel ? ' sel' : '');
+    row.innerHTML = '<span class="radio"></span><span class="dot' + (meta.online ? '' : ' off') +
+      '"></span><span class="name"></span><span class="chev">▶</span>';
+    row.querySelector('.name').textContent = meta.name;
+    row.querySelector('.name').title = meta.name;
+    // 点击名称行 = 展开/收起；点击圆点 = 选择数据源
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.radio')) return;
+      expandedUuid = open ? null : uuid;
+      syncNodes();
+      lastDraw = 0;
+      scheduleDraw();
+    });
+    row.querySelector('.radio').addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectSource('node', uuid);
+    });
+    card.appendChild(row);
+
+    const body = document.createElement('div');
+    body.className = 'nbody';
+    body.innerHTML =
+      '<div class="rates">—</div>' +
+      '<canvas class="mini"></canvas>' +
+      '<div class="bar-row"><span class="lbl">CPU</span><div class="bar cpu"><i></i></div><span class="pv">—</span></div>' +
+      '<div class="bar-row"><span class="lbl">内存</span><div class="bar mem"><i></i></div><span class="pv">—</span></div>';
+    card.appendChild(body);
+
+    container.appendChild(card);
+    card._refs = {
+      row,
+      rates: body.querySelector('.rates'),
+      canvas: body.querySelector('canvas.mini'),
+      cpuBar: body.querySelector('.bar.cpu'),
+      cpuPv: body.querySelectorAll('.pv')[0],
+      memBar: body.querySelector('.bar.mem'),
+      memPv: body.querySelectorAll('.pv')[1],
+    };
+  }
+  fitHeight();
+}
+
+// 增量补丁：不重建 DOM，只更新勾选态、在线点和数值
+function patchNodes() {
+  const container = document.getElementById('nodes');
+  const modeRow = container.querySelector('#mode-row');
+  if (modeRow) {
+    modeRow.classList.toggle('sel', traySource.mode === 'aggregate');
+  }
+  const cardEls = container.querySelectorAll('.card');
+  const uuids = [...nodeMeta.keys()];
+  cardEls.forEach((card, idx) => {
+    const uuid = uuids[idx];
+    const meta = nodeMeta.get(uuid);
+    if (!meta) return;
+    const r = card._refs;
+    r.row.classList.toggle('sel', traySource.mode === 'node' && traySource.pinned === uuid);
+    r.row.querySelector('.dot').className = 'dot' + (meta.online ? '' : ' off');
+    if (meta.online) {
+      const s = nodeSeries.get(uuid);
+      const last = s && s[s.length - 1];
+      r.rates.textContent = last ? '↑ ' + fmtRate(last.up) + ' · ↓ ' + fmtRate(last.down) : '—';
+      r.cpuPv.textContent = meta.cpu.toFixed(0) + '%';
+      r.memPv.textContent = meta.memPct.toFixed(0) + '%';
+      r.cpuBar.querySelector('i').style.width = Math.min(100, Math.max(0, meta.cpu)) + '%';
+      r.cpuBar.className = 'bar cpu' + (meta.cpu >= cpuWarnPct ? ' hot' : '');
+      r.memBar.querySelector('i').style.width = Math.min(100, Math.max(0, meta.memPct)) + '%';
+      r.memBar.className = 'bar mem' + (meta.memPct >= memWarnPct ? ' hot' : '');
+    } else {
+      r.rates.textContent = '离线';
+      r.cpuPv.textContent = '—';
+      r.memPv.textContent = '—';
+      r.cpuBar.querySelector('i').style.width = '0%';
+      r.cpuBar.className = 'bar cpu';
+      r.memBar.querySelector('i').style.width = '0%';
+      r.memBar.className = 'bar mem';
+    }
+  });
+}
+
+function drawMinis() {
+  const container = document.getElementById('nodes');
+  const uuids = [...nodeMeta.keys()];
+  container.querySelectorAll('.card.open').forEach((card) => {
+    const idx = [...container.querySelectorAll('.card')].indexOf(card);
+    const uuid = uuids[idx];
+    if (uuid) drawMini(card._refs.canvas, nodeSeries.get(uuid) || []);
+  });
+}
+
+// 弹窗高度随内容自适应(只受屏幕高度限制),节点区不出现滚动条
+async function fitHeight() {
+  const panel = document.getElementById('panel');
+  panel.style.height = 'auto';
+  const needed = panel.offsetHeight;
+  let maxH = MAX_POPOVER_H;
+  try {
+    const m = await win.currentMonitor();
+    if (m && m.size && m.size.height) maxH = m.size.height - 80;
+  } catch (e) { /* keep default cap */ }
+  const finalH = Math.min(Math.max(needed, MIN_POPOVER_H), Math.max(MIN_POPOVER_H, maxH));
+  document.body.style.height = finalH + 'px';
+  panel.style.height = '100%';
+  win.setSize(new LogicalSize(320, finalH)).catch(() => {});
+}
+
+function scheduleDraw() {
+  const now = Date.now();
+  if (now - lastDraw < 1000) return;
+  lastDraw = now;
+  syncNodes();
+  drawAggregate();
+  drawMinis();
+}
+
+function ingestSnap(snap) {
+  backendOk = !!snap.backend_ok;
+  onlineCount = snap.nodes.filter((n) => n.online).length;
+  if (snap.backend_ok) {
+    const t = snap.last_update_ms || Date.now();
+    nodeMeta = new Map();
+    for (const n of snap.nodes) {
+      nodeMeta.set(n.uuid, {
+        name: n.name || n.uuid,
+        online: !!n.online,
+        cpu: n.cpu_usage,
+        memPct: n.ram_total > 0 ? (n.ram_used / n.ram_total) * 100 : 0,
+      });
+      let s = nodeSeries.get(n.uuid);
+      if (!s) { s = []; nodeSeries.set(n.uuid, s); }
+      if (!s.length || t > s[s.length - 1].t) {
+        s.push({ t, up: n.net_up, down: n.net_down });
+        const cutoff = t - FRONT_BUFFER_MS;
+        while (s.length && s[0].t < cutoff) s.shift();
+      }
+    }
+    for (const uuid of [...nodeSeries.keys()]) {
+      if (!nodeMeta.has(uuid)) nodeSeries.delete(uuid);
+    }
+    points.push({
+      t,
+      up: snap.nodes.reduce((a, n) => a + n.net_up, 0),
+      down: snap.nodes.reduce((a, n) => a + n.net_down, 0),
+    });
+    while (points.length && points[0].t < t - FRONT_BUFFER_MS) points.shift();
+  }
+  renderHeader();
+  scheduleDraw();
+}
+
+async function refresh() {
+  try {
+    const s = await invoke('get_settings');
+    settingsCache = s;
+    if (s.chart_range_secs) rangeSecs = s.chart_range_secs;
+    cpuWarnPct = s.cpu_warn_pct || 80;
+    memWarnPct = s.mem_warn_pct || 85;
+    traySource = {
+      mode: s.tray_mode === 'node' ? 'node' : 'aggregate',
+      pinned: s.pinned_uuid || '',
+    };
+  } catch (e) { /* keep current values */ }
+  try {
+    const payload = await invoke('get_net_history', { rangeSecs: 21600 });
+    points = payload.aggregate || [];
+    nodeSeries = new Map(Object.entries(payload.nodes || {}));
+  } catch (e) {
+    points = [];
+    nodeSeries = new Map();
+  }
+  if (traySource.mode === 'node' && nodeMeta.has(traySource.pinned)) {
+    expandedUuid = traySource.pinned;
+  }
+  renderHeader();
+  lastDraw = 0;
+  renderNodes();
+  drawAggregate();
+  drawMinis();
+}
+
+document.getElementById('btn-panel').addEventListener('click', async () => {
+  await invoke('open_panel_cmd').catch(() => {});
+  win.hide();
+});
+document.getElementById('btn-settings').addEventListener('click', async () => {
+  await invoke('open_settings_cmd').catch(() => {});
+  win.hide();
+});
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') win.hide(); });
+
+// 固定显示：失焦不自动收起，再次打开也保持拖动后的位置
+const pinBtn = document.getElementById('btn-pin');
+let pinned = false;
+function renderPin() {
+  pinBtn.classList.toggle('active', pinned);
+  pinBtn.title = pinned ? '取消固定（失焦自动关闭）' : '固定显示（失焦不关闭）';
+}
+pinBtn.addEventListener('click', async () => {
+  pinned = !pinned;
+  renderPin();
+  await invoke('set_chart_pinned', { pinned }).catch(() => {});
+});
+
+// 按住头部拖动移动窗口
+document.getElementById('header').addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest('#btn-pin')) return;
+  win.startDragging().catch(() => {});
+});
+
+async function restorePin() {
+  try {
+    pinned = await invoke('get_chart_pinned');
+    renderPin();
+  } catch (e) { /* default unpinned */ }
+}
+window.addEventListener('resize', () => { lastDraw = 0; scheduleDraw(); });
+
+(async () => {
+  await listen('monitor://update', (e) => ingestSnap(e.payload));
+  // Re-read settings/history every time the popover is shown (focus gained),
+  // so changes made in the tray menu are reflected here (two-way sync).
+  win.listen('tauri://focus', refresh);
+  await restorePin();
+  refresh();
+})();
+</script>
+</body>
+</html>

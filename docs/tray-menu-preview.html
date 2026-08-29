@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hotaru 托盘菜单重设计 · 预览 v2</title>
+<style>
+  :root {
+    --ink: #1d1d1f;
+    --ink-2: #6e6e73;
+    --page: #f5f5f7;
+    --card: #ffffff;
+    --line: #e5e5ea;
+    --accent: #0a60ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    background: var(--page); color: var(--ink);
+    padding: 40px clamp(20px, 5vw, 72px) 80px;
+  }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .sub { color: var(--ink-2); font-size: 14px; margin: 8px 0 32px; line-height: 1.6; }
+  h2 { font-size: 18px; font-weight: 700; margin: 48px 0 6px; letter-spacing: -0.01em; }
+  .h2sub { color: var(--ink-2); font-size: 13px; margin-bottom: 18px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 24px; max-width: 1200px; }
+
+  .panel {
+    border-radius: 16px; overflow: hidden; border: 1px solid var(--line);
+    background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 18px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600;
+  }
+  .badge-os { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px; letter-spacing: .02em; }
+  .b-mac  { background: #ececf1; color: #3a3a3c; }
+  .b-win  { background: #e7f0e9; color: #1f6b33; }
+
+  .wall {
+    position: relative; min-height: 470px; display: flex; align-items: center; justify-content: center;
+    padding: 34px 20px;
+  }
+  .wall.mac-light { background: linear-gradient(135deg,#a8c8e8 0%,#d8e6f3 45%,#f0d9c8 100%); }
+  .wall.mac-dark  { background: linear-gradient(135deg,#1c2a44 0%,#2d3f63 50%,#4a3a56 100%); }
+  .wall.win-light { background: linear-gradient(135deg,#cfe3f5 0%,#e8eff7 50%,#f3e9e0 100%); }
+  .wall.win-dark  { background: linear-gradient(135deg,#14202e 0%,#1f3245 55%,#3a2a3e 100%); }
+
+  /* ---------- macOS 原生菜单 ---------- */
+  .mac-menu {
+    width: 292px; border-radius: 13px; font-size: 13.5px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+    background: rgba(246,246,248,.82); backdrop-filter: blur(28px) saturate(1.6);
+    border: .5px solid rgba(0,0,0,.18);
+    box-shadow: 0 12px 44px rgba(0,0,0,.30), 0 2px 8px rgba(0,0,0,.12);
+    padding: 5px; color: #1d1d1f;
+  }
+  .mac-dark .mac-menu {
+    background: rgba(38,38,40,.74); border-color: rgba(255,255,255,.14); color: #f2f2f4;
+  }
+  .mi { display: flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 6px; white-space: nowrap; }
+  .mi .ck { width: 17px; flex: none; font-size: 12.5px; }
+  .mi .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .mi .tail { margin-left: 14px; font-variant-numeric: tabular-nums; color: inherit; opacity: .66; font-size: 12px; }
+  .mi.off { color: #9a9a9f; }
+  .mac-dark .mi.off { color: #84848a; }
+  .mi.hl { background: var(--accent); color: #fff !important; }
+  .mi.hl .tail { opacity: .85; }
+  .mi.sec { height: 20px; font-size: 12px; color: #9a9a9f; letter-spacing: .01em; }
+  .mac-dark .mi.sec { color: #84848a; }
+  .msep { height: 1px; margin: 5px 10px; background: rgba(0,0,0,.11); }
+  .mac-dark .msep { background: rgba(255,255,255,.13); }
+
+  /* ---------- Windows 11 原生菜单 ---------- */
+  .win-menu {
+    width: 312px; border-radius: 8px; font-size: 13px;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    background: rgba(248,248,248,.94); backdrop-filter: blur(24px);
+    border: 1px solid rgba(0,0,0,.08);
+    box-shadow: 0 10px 34px rgba(0,0,0,.22);
+    padding: 5px; color: #1a1a1a;
+  }
+  .win-dark .win-menu { background: rgba(44,44,46,.96); border-color: rgba(255,255,255,.09); color: #f3f3f3; }
+  .win-menu .mi { height: 34px; padding: 0 12px; border-radius: 5px; }
+  .win-menu .mi .ck { width: 20px; font-size: 13px; }
+  .win-menu .mi .tail { font-size: 12px; }
+  .win-menu .mi.off { color: #9d9da1; }
+  .win-dark .win-menu .mi.off { color: #86868a; }
+  .win-menu .mi.hl { background: rgba(0,0,0,.055); color: inherit; }
+  .win-dark .win-menu .mi.hl { background: rgba(255,255,255,.07); }
+  .win-menu .msep { margin: 5px 8px; background: rgba(0,0,0,.09); }
+  .win-dark .win-menu .msep { background: rgba(255,255,255,.10); }
+
+  /* ---------- 标注 ---------- */
+  .note {
+    position: absolute; width: 21px; height: 21px; border-radius: 50%;
+    background: #ff9f0a; color: #fff; font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,.35); z-index: 2;
+  }
+  .legend { padding: 14px 18px 18px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+  .legend div { display: flex; gap: 10px; font-size: 12.5px; color: #48484d; line-height: 1.55; }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .n {
+    flex: none; width: 19px; height: 19px; margin-top: 1px; border-radius: 50%;
+    background: #ff9f0a; color: #fff; font-size: 11px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+
+  .menubar-hint {
+    position: absolute; top: 0; left: 0; right: 0; height: 26px;
+    display: flex; align-items: center; justify-content: flex-end; gap: 14px;
+    padding: 0 16px; font-size: 12px;
+  }
+  .mac-light .menubar-hint { color: rgba(0,0,0,.75); }
+  .mac-dark  .menubar-hint { color: rgba(255,255,255,.85); }
+  .win-light .menubar-hint { color: rgba(0,0,0,.6); }
+  .win-dark  .menubar-hint { color: rgba(255,255,255,.7); }
+  .tray-dot { width: 18px; height: 18px; border-radius: 4.5px; position: relative; }
+  .mac-light .tray-dot, .win-light .tray-dot { background: rgba(0,0,0,.14); outline: 1.5px solid var(--accent); outline-offset: 1px; }
+  .mac-dark  .tray-dot, .win-dark  .tray-dot { background: rgba(255,255,255,.22); outline: 1.5px solid #6db2ff; outline-offset: 1px; }
+</style>
+</head>
+<body>
+
+<h1>Hotaru 托盘菜单 · 重设计预览</h1>
+<p class="sub">
+  目标:两端均使用<b>操作系统原生菜单</b>(macOS = NSMenu 毛玻璃,Windows = Win32 上下文菜单随系统深浅色),
+  结构统一为「状态区 → 监控对象单选 → 操作区」三段,层级由两级降为零级。<br>
+  本文件为纯设计预览,不代表实现。约束:muda 菜单项仅支持纯文本 / 勾选 / 禁用 / 分隔线 / 子菜单,不支持图标与彩色文字。
+</p>
+
+<h2>现状 vs 新设计(以 macOS 深色为例)</h2>
+<p class="h2sub">左侧为当前版本的结构问题;右侧为 v2 结构。</p>
+<div class="grid">
+  <div class="panel">
+    <div class="panel-head">现状(v1)<span class="badge-os b-mac">macOS</span></div>
+    <div class="wall mac-dark">
+      <div class="mac-menu">
+        <div class="mi off"><span class="ck"></span><span class="lbl">在线 3/5 · CPU 42% · 内存 61% · ↑12M ↓45M</span></div>
+        <div class="msep"></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">Node-Alpha · CPU 30% · 内存 55% · ↑12M ↓3M</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">Node-Beta · CPU 88% · 内存 72% · ↑1M ↓46M</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">⚠ Node-Gamma · 离线</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">打开面板</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">设置…</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">托盘数据源</span><span class="tail">▸</span></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">开机自启</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">退出</span></div>
+      </div>
+      <div class="menubar-hint"><span>◎</span><span class="tray-dot"></span></div>
+    </div>
+    <div class="legend">
+      <div><b>问题:</b>头部一行塞四类数据,拥挤难扫读</div>
+      <div><b>问题:</b>节点「信息行」与子菜单「关注项」重复两处</div>
+      <div><b>问题:</b>切换关注需要进二级子菜单</div>
+      <div><b>问题:</b>「开机自启」夹在数据区里,语义错位</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">新设计(v2)<span class="badge-os b-mac">macOS</span></div>
+    <div class="wall mac-dark">
+      <div class="mac-menu">
+        <div class="mi sec"><span class="ck"></span><span class="lbl">汇总视图 · 在线 2/3</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">CPU 51% · 内存 63%</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">↑ 13.1 MB/s · ↓ 46.4 MB/s</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">汇总全部节点</span></div>
+        <div class="mi hl"><span class="ck"></span><span class="lbl">Node-Alpha</span><span class="tail">↑12.3M · ↓3.2M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Beta</span><span class="tail">↑0.8M · ↓46.1M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Gamma · 离线</span><span class="tail">—</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">打开面板</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">设置…</span></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">开机自启</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">退出 Hotaru</span></div>
+      </div>
+      <div class="menubar-hint"><span>◎</span><span class="tray-dot"></span></div>
+      <span class="note" style="right: 214px; top: 118px;">1</span>
+      <span class="note" style="right: 44px; top: 196px;">2</span>
+      <span class="note" style="right: 44px; top: 252px;">3</span>
+    </div>
+    <div class="legend">
+      <div><span class="n">1</span><span><b>状态区三行化</b>:视图名+在线数 / 负载 / 速率,一行一个维度,全部为禁用项</span></div>
+      <div><span class="n">2</span><span><b>节点行即单选项</b>:点击 = 只关注该节点,勾选标明当前对象,子菜单取消</span></div>
+      <div><span class="n">3</span><span><b>速率右置</b>:用数字空格对齐到行尾(muda 无富文本,为近似右对齐)</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>macOS — 原生 NSMenu(悬停高亮 / 勾选态)</h2>
+<p class="h2sub">左:汇总模式(默认)。右:「只关注 Node-Beta」时的单选态,无子菜单直达。</p>
+<div class="grid">
+  <div class="panel">
+    <div class="panel-head">汇总模式(浅色)<span class="badge-os b-mac">macOS</span></div>
+    <div class="wall mac-light">
+      <div class="mac-menu">
+        <div class="mi sec"><span class="ck"></span><span class="lbl">汇总视图 · 在线 2/3</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">CPU 51% · 内存 63%</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">↑ 13.1 MB/s · ↓ 46.4 MB/s</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">汇总全部节点</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Alpha</span><span class="tail">↑12.3M · ↓3.2M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Beta</span><span class="tail">↑0.8M · ↓46.1M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Gamma · 离线</span><span class="tail">—</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">打开面板</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">设置…</span><span class="tail">⌘,</span></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">开机自启</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">退出 Hotaru</span><span class="tail">⌘Q</span></div>
+      </div>
+      <div class="menubar-hint"><span>↑12.3M ↓46.4M</span><span class="tray-dot"></span></div>
+    </div>
+    <div class="legend">
+      <div><span class="n">4</span><span>macOS 专属(可选):「设置… ⌘,」「退出 ⌘Q」注册原生加速键,muda 原生支持;Windows 端自动不显示</span></div>
+      <div><span class="n">5</span><span>菜单栏文字(现有 show_menu_bar_text)保持 ↑↓ 速率,与菜单互不干扰</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">只关注单节点(深色 · 悬停中)<span class="badge-os b-mac">macOS</span></div>
+    <div class="wall mac-dark">
+      <div class="mac-menu">
+        <div class="mi sec"><span class="ck"></span><span class="lbl">Node-Beta · 在线</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">CPU 88% · 内存 72%</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">↑ 0.8 MB/s · ↓ 46.1 MB/s</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">汇总全部节点</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Alpha</span><span class="tail">↑12.3M · ↓3.2M</span></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">Node-Beta</span><span class="tail">↑0.8M · ↓46.1M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Gamma · 离线</span><span class="tail">—</span></div>
+        <div class="msep"></div>
+        <div class="mi hl"><span class="ck"></span><span class="lbl">打开面板</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">设置…</span><span class="tail">⌘,</span></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">开机自启</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">退出 Hotaru</span><span class="tail">⌘Q</span></div>
+      </div>
+      <div class="menubar-hint"><span>↑0.8M ↓46.1M</span><span class="tray-dot"></span></div>
+    </div>
+    <div class="legend">
+      <div><span class="n">6</span><span>单节点关注时,状态区三行切换为该节点的概览(与托盘图标 / tooltip 数据源一致)</span></div>
+      <div><span class="n">7</span><span>离线节点仍可被选中关注(只盯一台离线机器的场景),行内以「· 离线」文字标注</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>Windows — Win32 原生上下文菜单(随系统深浅色)</h2>
+<p class="h2sub">同一份结构在 Windows 的原生观感:Segoe UI、左侧勾选、悬停为中性灰(Windows 不用蓝色高亮普通项)。</p>
+<div class="grid">
+  <div class="panel">
+    <div class="panel-head">浅色模式<span class="badge-os b-win">Windows 11</span></div>
+    <div class="wall win-light">
+      <div class="win-menu">
+        <div class="mi off"><span class="ck"></span><span class="lbl">汇总视图 · 在线 2/3</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">CPU 51% · 内存 63%</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">↑ 13.1 MB/s · ↓ 46.4 MB/s</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">汇总全部节点</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Alpha</span><span class="tail">↑12.3M · ↓3.2M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Beta</span><span class="tail">↑0.8M · ↓46.1M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Gamma · 离线</span><span class="tail">—</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">打开面板</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">设置…</span></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">开机自启</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">退出 Hotaru</span></div>
+      </div>
+      <div class="menubar-hint"><span class="tray-dot"></span></div>
+    </div>
+    <div class="legend">
+      <div><span class="n">8</span><span>交互建议:Windows 左键单击也弹菜单(托盘惯例),双击打开面板;macOS 左键菜单、双击面板(现状保留)</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">深色模式<span class="badge-os b-win">Windows 11</span></div>
+    <div class="wall win-dark">
+      <div class="win-menu">
+        <div class="mi off"><span class="ck"></span><span class="lbl">汇总视图 · 在线 2/3</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">CPU 51% · 内存 63%</span></div>
+        <div class="mi off"><span class="ck"></span><span class="lbl">↑ 13.1 MB/s · ↓ 46.4 MB/s</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">汇总全部节点</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Alpha</span><span class="tail">↑12.3M · ↓3.2M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Beta</span><span class="tail">↑0.8M · ↓46.1M</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">Node-Gamma · 离线</span><span class="tail">—</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">打开面板</span></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">设置…</span></div>
+        <div class="mi"><span class="ck">✓</span><span class="lbl">开机自启</span></div>
+        <div class="msep"></div>
+        <div class="mi"><span class="ck"></span><span class="lbl">退出 Hotaru</span></div>
+      </div>
+      <div class="menubar-hint"><span class="tray-dot"></span></div>
+    </div>
+    <div class="legend">
+      <div><span class="n">9</span><span>macOS 的小号分节标题在 Windows 端以同字号禁用灰字呈现(原生 Win32 菜单无小字样式)</span></div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

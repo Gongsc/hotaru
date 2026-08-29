@@ -9,7 +9,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::models::{
     report_to_snapshot, normalize_base, now_ms, ws_url_of, ClientInfo, Envelope,
-    MonitorSnapshot, NodeSnapshot, Report, Settings, WsPayload,
+    MonitorSnapshot, NetFrame, NodeSnapshot, Report, Settings, WsPayload,
 };
 use crate::state::AppState;
 use crate::tray;
@@ -258,6 +258,12 @@ fn publish(app: &AppHandle, snap: MonitorSnapshot, last_tray: &mut Instant) {
     {
         let st = app.state::<AppState>();
         *st.snapshot.write() = snap.clone();
+        let nodes = snap
+            .nodes
+            .iter()
+            .map(|n| (n.uuid.clone(), n.net_up, n.net_down))
+            .collect();
+        st.net_history.push(NetFrame { t: snap.last_update_ms, nodes });
     }
     let _ = app.emit(EVENT, &snap);
     if last_tray.elapsed() >= TRAY_MIN_INTERVAL {

@@ -16,6 +16,7 @@ pub struct Settings {
     pub cpu_warn_pct: f64,
     pub mem_warn_pct: f64,
     pub accept_invalid_certs: bool,
+    pub chart_range_secs: u64,
 }
 
 impl Default for Settings {
@@ -30,9 +31,14 @@ impl Default for Settings {
             cpu_warn_pct: 80.0,
             mem_warn_pct: 85.0,
             accept_invalid_certs: false,
+            chart_range_secs: CHART_RANGE_DEFAULT,
         }
     }
 }
+
+/// Selectable display ranges (seconds) for the tray network chart.
+pub const CHART_RANGES: &[u64] = &[300, 900, 3600, 21_600];
+pub const CHART_RANGE_DEFAULT: u64 = 900;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -50,6 +56,9 @@ impl Settings {
         self.mem_warn_pct = self.mem_warn_pct.clamp(1.0, 100.0);
         if self.pinned_uuid.trim().is_empty() {
             self.tray_mode = TrayMode::Aggregate;
+        }
+        if !CHART_RANGES.contains(&self.chart_range_secs) {
+            self.chart_range_secs = CHART_RANGE_DEFAULT;
         }
         self
     }
@@ -113,6 +122,26 @@ pub struct Aggregate {
     pub net_down: f64,
     pub total_up: u64,
     pub total_down: u64,
+}
+
+/// One sampled point of the aggregate network history (in-memory only).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct NetPoint {
+    /// Epoch milliseconds.
+    pub t: u64,
+    /// B/s summed over all nodes.
+    pub up: f64,
+    /// B/s summed over all nodes.
+    pub down: f64,
+}
+
+/// One history frame: a timestamp plus every node's rates at that moment.
+/// `(uuid, up B/s, down B/s)` per entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetFrame {
+    /// Epoch milliseconds.
+    pub t: u64,
+    pub nodes: Vec<(String, f64, f64)>,
 }
 
 /// Nodes covered by the current tray mode: all nodes, or the pinned one
@@ -312,25 +341,6 @@ pub fn fmt_rate(bps: f64) -> String {
     }
 }
 
-pub fn fmt_bytes(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * KB;
-    const GB: f64 = 1024.0 * MB;
-    const TB: f64 = 1024.0 * GB;
-    let b = bytes as f64;
-    if b < KB {
-        format!("{bytes}B")
-    } else if b < MB {
-        format!("{:.1}KB", b / KB)
-    } else if b < GB {
-        format!("{:.2}MB", b / MB)
-    } else if b < TB {
-        format!("{:.2}GB", b / GB)
-    } else {
-        format!("{:.2}TB", b / TB)
-    }
-}
-
 #[allow(dead_code)]
 pub fn fmt_uptime(secs: u64) -> String {
     #[allow(clippy::manual_div_ceil)]
@@ -505,8 +515,6 @@ mod tests {
         assert_eq!(fmt_rate(512.0), "512B/s");
         assert_eq!(fmt_rate(2048.0), "2.0KB/s");
         assert_eq!(fmt_rate(3.4 * 1024.0 * 1024.0), "3.40MB/s");
-        assert_eq!(fmt_bytes(0), "0B");
-        assert_eq!(fmt_bytes(5 * 1024 * 1024 * 1024), "5.00GB");
         assert_eq!(fmt_uptime(3600 * 27), "1天3小时");
         assert_eq!(fmt_uptime(300), "5分钟");
     }
@@ -661,6 +669,22 @@ mod tests {
         }];
         // pinned node vanished -> falls back to all nodes
         assert_eq!(scoped_nodes(&s, &nodes).len(), 1);
+    }
+
+    #[test]
+    fn chart_range_sanitized() {
+        // valid presets pass through
+        for &r in CHART_RANGES {
+            let mut s = Settings::default();
+            s.chart_range_secs = r;
+            assert_eq!(s.sanitized().chart_range_secs, r);
+        }
+        // out-of-preset values fall back to the default
+        for bad in [0, 1, 299, 3601, 100_000, u64::MAX] {
+            let mut s = Settings::default();
+            s.chart_range_secs = bad;
+            assert_eq!(s.sanitized().chart_range_secs, CHART_RANGE_DEFAULT);
+        }
     }
 
     impl NodeSnapshot {

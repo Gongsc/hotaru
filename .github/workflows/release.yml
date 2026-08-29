@@ -14,10 +14,18 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
+            # macOS 只产 dmg；fail_on_unmatched_files 下平台无关的清单会导致误报失败
+            release_files: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/**/*.dmg
           - os: macos-latest
             target: x86_64-apple-darwin
+            release_files: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/**/*.dmg
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            release_files: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -52,7 +60,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
-          files: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+          files: ${{ matrix.release_files }}

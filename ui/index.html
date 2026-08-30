@@ -122,13 +122,6 @@
 
   <section>
     <h2>托盘</h2>
-    <div class="radio-row" role="radiogroup" aria-label="托盘数据源">
-      <label class="check"><input type="radio" name="trayMode" id="modeAggregate" value="aggregate"> 汇总全部节点</label>
-      <label class="check"><input type="radio" name="trayMode" id="modeNode" value="node"> 关注单个节点</label>
-      <select id="nodeSelect" style="flex:1; min-width:140px;" aria-label="选择关注的节点">
-        <option value="">（暂无节点）</option>
-      </select>
-    </div>
     <label class="check" id="macTitleRow">
       <input type="checkbox" id="showTitle"> macOS 菜单栏显示实时速率文字
     </label>
@@ -165,25 +158,6 @@
     </label>
     <p class="hint">汇总上下行速率的历史曲线。数据仅保存在内存中（固定保留 6 小时），重启应用后清空；曲线时间粒度与刷新间隔一致。</p>
   </section>
-
-  <section>
-    <h2>实时状态</h2>
-    <div class="status-head">
-      <span><span class="dot err" id="statusDot"></span> <span id="statusText">加载中…</span></span>
-      <span id="updatedText"></span>
-    </div>
-    <div style="overflow-x:auto;">
-      <table>
-        <thead>
-          <tr><th>节点</th><th>CPU</th><th>内存</th><th>↑</th><th>↓</th><th>状态</th></tr>
-        </thead>
-        <tbody id="nodeRows">
-          <tr><td colspan="6" style="color:var(--muted)">等待数据…</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="status-msg" id="statusMsg" hidden></div>
-  </section>
 </main>
 
 <footer>
@@ -195,18 +169,10 @@
 
 <script>
 const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 const isMac = /Mac/i.test(navigator.userAgent);
 
-function fmtRate(bps) {
-  if (bps < 1024) return bps.toFixed(0) + 'B/s';
-  if (bps < 1048576) return (bps / 1024).toFixed(1) + 'KB/s';
-  if (bps < 1073741824) return (bps / 1048576).toFixed(2) + 'MB/s';
-  return (bps / 1073741824).toFixed(2) + 'GB/s';
-}
-function pctOf(used, total) { return total > 0 ? (used / total * 100) : 0; }
 function toast(text) {
   const t = $('toast');
   t.textContent = text;
@@ -220,8 +186,6 @@ function collect() {
     backend_url: $('backendUrl').value.trim(),
     api_key: $('apiKey').value.trim(),
     poll_interval_secs: Math.max(1, Math.min(60, Number($('pollInterval').value) || 3)),
-    tray_mode: $('modeNode').checked ? 'node' : 'aggregate',
-    pinned_uuid: $('nodeSelect').value,
     show_menu_bar_text: $('showTitle').checked,
     cpu_warn_pct: Math.max(1, Math.min(100, Number($('cpuWarn').value) || 80)),
     mem_warn_pct: Math.max(1, Math.min(100, Number($('memWarn').value) || 85)),
@@ -240,72 +204,9 @@ function fillSettings(s) {
   $('acceptInvalid').checked = !!s.accept_invalid_certs;
   $('chartRange').value = String(s.chart_range_secs ?? 900);
   if ($('chartRange').selectedIndex === -1) $('chartRange').value = '900';
-  if (s.tray_mode === 'node') { $('modeNode').checked = true; } else { $('modeAggregate').checked = true; }
 }
 
-function renderNodes(snap) {
-  const dot = $('statusDot');
-  const statusText = $('statusText');
-  const msg = $('statusMsg');
-  if (snap.backend_ok) {
-    dot.className = 'dot ok';
-    statusText.textContent = `已连接 · 在线 ${snap.nodes.filter(n => n.online).length}/${snap.nodes.length} 个节点`;
-    msg.hidden = true;
-  } else {
-    dot.className = 'dot err';
-    statusText.textContent = '后端不可达';
-    msg.hidden = !snap.error;
-    msg.textContent = snap.error || '';
-  }
-  $('updatedText').textContent = snap.last_update_ms
-    ? '更新于 ' + new Date(snap.last_update_ms).toLocaleTimeString()
-    : '';
 
-  // node select (preserve selection)
-  const sel = $('nodeSelect');
-  const prev = sel.value;
-  sel.innerHTML = '';
-  for (const n of snap.nodes) {
-    const opt = document.createElement('option');
-    opt.value = n.uuid;
-    opt.textContent = n.name + (n.online ? '' : '（离线）');
-    sel.appendChild(opt);
-  }
-  if (!sel.options.length) {
-    sel.innerHTML = '<option value="">（暂无节点）</option>';
-  } else if ([...sel.options].some(o => o.value === prev)) {
-    sel.value = prev;
-  }
-
-  // table
-  const rows = $('nodeRows');
-  if (!snap.nodes.length) {
-    rows.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">等待数据…</td></tr>';
-    return;
-  }
-  rows.innerHTML = snap.nodes.map(n => {
-    const mem = n.ram_total > 0
-      ? `${(n.ram_used / 1073741824).toFixed(1)}/${(n.ram_total / 1073741824).toFixed(1)}GB (${pctOf(n.ram_used, n.ram_total).toFixed(0)}%)`
-      : '-';
-    const state = n.online
-      ? '<span class="dot ok"></span>在线'
-      : '<span class="dot off"></span>离线';
-    return `<tr>
-      <td title="${n.uuid}">${escapeHtml(n.name)}</td>
-      <td>${n.online ? n.cpu_usage.toFixed(0) + '%' : '-'}</td>
-      <td>${n.online ? mem : '-'}</td>
-      <td>${n.online ? fmtRate(n.net_up) : '-'}</td>
-      <td>${n.online ? fmtRate(n.net_down) : '-'}</td>
-      <td>${state}</td>
-    </tr>`;
-  }).join('');
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
 
 async function refreshAutostart() {
   try { $('autostart').checked = await invoke('get_autostart'); } catch (_) {}
@@ -315,12 +216,10 @@ async function boot() {
   if (!isMac) $('macTitleRow').style.display = 'none';
   try {
     fillSettings(await invoke('get_settings'));
-    renderNodes(await invoke('get_snapshot'));
   } catch (e) {
     console.error(e);
   }
   await refreshAutostart();
-  await listen('monitor://update', (e) => renderNodes(e.payload));
 }
 
 $('saveBtn').addEventListener('click', async () => {

@@ -132,16 +132,30 @@ async fn ws_session(
 pub fn parse_ws_text(txt: &str, nodes: &HashMap<String, ClientInfo>) -> Option<MonitorSnapshot> {
     let env: Envelope<WsPayload> = serde_json::from_str(txt).ok()?;
     let payload = env.data?;
-    let mut out: Vec<NodeSnapshot> = payload
-        .data
-        .iter()
-        .map(|(uuid, rep)| {
-            let info = nodes.get(uuid);
-            let name = info.map(|c| c.name.as_str()).unwrap_or("");
-            let region = info.map(|c| c.region.as_str()).unwrap_or("");
-            let os = info.map(|c| c.os.as_str()).unwrap_or("");
-            let online = payload.online.iter().any(|o| o == uuid);
-            report_to_snapshot(uuid, name, region, os, online, rep)
+    // 以已知节点列表为准:未出现在实时推送里的节点(如 HTTP 上报的
+    // 路由器设备)按离线展示,而不是直接消失。
+    let mut out: Vec<NodeSnapshot> = nodes
+        .values()
+        .map(|info| {
+            let online = payload.online.iter().any(|o| o == &info.uuid);
+            match payload.data.get(&info.uuid) {
+                Some(rep) => report_to_snapshot(
+                    &info.uuid,
+                    &info.name,
+                    &info.region,
+                    &info.os,
+                    online,
+                    rep,
+                ),
+                None => report_to_snapshot(
+                    &info.uuid,
+                    &info.name,
+                    &info.region,
+                    &info.os,
+                    false,
+                    &Report::default(),
+                ),
+            }
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -301,4 +315,35 @@ fn clear_error(app: &AppHandle) {
 /// public sites without an API key).
 fn origin_of_safe(base: &str) -> String {
     crate::models::origin_of(base)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ws_parse_keeps_nodes_without_live_data() {
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            "uuid-1".to_string(),
+            ClientInfo { uuid: "uuid-1".into(), name: "A".into(), ..Default::default() },
+        );
+        nodes.insert(
+            "uuid-2".to_string(),
+            ClientInfo { uuid: "uuid-2".into(), name: "B".into(), ..Default::default() },
+        );
+        nodes.insert(
+            "uuid-3".to_string(),
+            ClientInfo { uuid: "uuid-3".into(), name: "C".into(), ..Default::default() },
+        );
+        let txt = r#"{"status":"success","data":{"data":{"uuid-1":{"cpu":{"usage":10}}},"online":["uuid-1"]}}"#;
+        let snap = parse_ws_text(txt, &nodes).expect("parse ok");
+        assert_eq!(snap.nodes.len(), 3);
+        let a = snap.nodes.iter().find(|n| n.uuid == "uuid-1").unwrap();
+        assert!(a.online);
+        assert!((a.cpu_usage - 10.0).abs() < 1e-9);
+        let c = snap.nodes.iter().find(|n| n.uuid == "uuid-3").unwrap();
+        assert!(!c.online);
+        assert_eq!(c.cpu_usage, 0.0);
+    }
 }

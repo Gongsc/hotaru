@@ -25,6 +25,8 @@ pub fn run() {
             tray::create(&handle)?;
             monitor::spawn(handle.clone());
             windows::spawn_panel_watchdog_loop(&handle);
+            // 面板必须在启动时创建:实测经 IPC/命令线程延后创建的 External
+            // webview 在本机 WebView2 上会静默失败(白屏且导航不启动)。
             if handle
                 .state::<AppState>()
                 .settings
@@ -34,6 +36,8 @@ pub fn run() {
                 .is_empty()
             {
                 windows::open_settings(&handle);
+            } else {
+                windows::open_panel(&handle);
             }
             Ok(())
         })

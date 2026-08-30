@@ -55,8 +55,9 @@ pub fn mark_panel_loaded(app: &AppHandle) {
     st.panel_load_ms.store(ms, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Spawn a one-shot watchdog: if no successful page load was recorded after
-/// `PANEL_LOAD_TIMEOUT`, reload the panel once. Started on every open/create.
+/// Spawn a watchdog after panel creation: if the page hasn't shown itself
+/// within 6s (load-finished triggers the show), display it anyway so the
+/// window can't stay invisible; if it loaded but hung, recreate at 20s.
 pub fn spawn_panel_watchdog(app: &AppHandle) {
     let handle = app.clone();
     let before = handle
@@ -64,7 +65,13 @@ pub fn spawn_panel_watchdog(app: &AppHandle) {
         .panel_load_ms
         .load(std::sync::atomic::Ordering::Relaxed);
     std::thread::spawn(move || {
-        std::thread::sleep(PANEL_LOAD_TIMEOUT);
+        std::thread::sleep(std::time::Duration::from_secs(6));
+        let Some(window) = handle.get_webview_window("main") else { return };
+        if !window.is_visible().unwrap_or(true) {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        std::thread::sleep(PANEL_LOAD_TIMEOUT - std::time::Duration::from_secs(6));
         let Some(window) = handle.get_webview_window("main") else { return };
         let loaded = handle
             .state::<AppState>()
@@ -119,7 +126,16 @@ pub fn spawn_panel_watchdog_loop(app: &AppHandle) {
 
 /// Open (or focus) the main window showing the Komari dashboard at the
 /// configured backend URL. Falls back to settings when unconfigured.
+///
+/// Always dispatches to the main thread: WebView2 controllers must be
+/// created on an STA thread, and command handlers run on MTA threads —
+/// creating the window there silently produces a dead (white) webview.
 pub fn open_panel(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || open_panel_on_main(&handle));
+}
+
+fn open_panel_on_main(app: &AppHandle) {
     let raw = app.state::<AppState>().settings.read().backend_url.clone();
     let Ok(base) = normalize_base(&raw) else {
         open_settings(app);
@@ -172,23 +188,6 @@ fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
         .title("Hotaru Panel")
         .inner_size(1200.0, 800.0)
         .min_inner_size(780.0, 560.0)
-        .on_page_load(|webview, payload| {
-            let app = webview.app_handle();
-            let st = app.state::<AppState>();
-            let now = now_ms_u64();
-            match payload.event() {
-                tauri::webview::PageLoadEvent::Started => st
-                    .panel_load_started_ms
-                    .store(now, std::sync::atomic::Ordering::Relaxed),
-                tauri::webview::PageLoadEvent::Finished => {
-                    st.panel_load_ms
-                        .store(now, std::sync::atomic::Ordering::Relaxed);
-                    // 加载成功,重置重建熔断计数
-                    st.panel_recreate_streak
-                        .store(0, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
-        })
         .build()?;
     *app.state::<AppState>().loaded_panel_url.lock() = Some(base.to_string());
     let _ = window.set_focus();
@@ -317,7 +316,14 @@ fn monitor_containing(
         .or_else(|| app.primary_monitor().ok().flatten())
 }
 
+/// Open (or focus) the settings window. Dispatches to the main thread (see
+/// open_panel for why).
 pub fn open_settings(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || open_settings_on_main(&handle));
+}
+
+fn open_settings_on_main(app: &AppHandle) {
     match app.get_webview_window("settings") {
         Some(window) => {
             let _ = window.show();

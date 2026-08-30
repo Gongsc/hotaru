@@ -24,6 +24,7 @@ pub fn run() {
             app.manage(state::init(&handle));
             tray::create(&handle)?;
             monitor::spawn(handle.clone());
+            windows::spawn_panel_watchdog_loop(&handle);
             if handle
                 .state::<AppState>()
                 .settings
@@ -38,11 +39,15 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                if window.label() == "main" || window.label() == "chart" {
+                if window.label() == "main" {
                     // Closing the panel hides it; the tray keeps running.
-                    // The chart popover is hide-only (it has no decorations).
                     api.prevent_close();
                     let _ = window.hide();
+                } else if window.label() == "chart" {
+                    // The popover has no decorations; always destroy it so a
+                    // wedged webview can never linger.
+                    api.prevent_close();
+                    crate::windows::close_chart(window);
                 }
             }
             WindowEvent::Focused(false) => {
@@ -68,7 +73,7 @@ pub fn run() {
                                 .state::<AppState>()
                                 .chart_hidden_at
                                 .lock() = Some(std::time::Instant::now());
-                            let _ = win.hide();
+                            crate::windows::close_chart(&win);
                         }
                     });
                 }
@@ -87,6 +92,7 @@ pub fn run() {
             commands::open_settings_cmd,
             commands::get_chart_pinned,
             commands::set_chart_pinned,
+            commands::get_ping_records,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hotaru");

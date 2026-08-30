@@ -3,11 +3,119 @@ use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, Web
 use crate::models::normalize_base;
 use crate::state::AppState;
 
-/// Logical size of the chart popover (node list scrolls internally).
-const CHART_SIZE: (f64, f64) = (320.0, 470.0);
+/// Logical size of the chart popover. Height depends on the node count so
+/// the builder's initial size already matches the content (the page still
+/// fine-tunes it from JS).
+fn chart_logical_size(node_count: usize) -> (f64, f64) {
+    let base = 224.0 + node_count as f64 * 32.0 + 46.0;
+    (320.0, base.clamp(300.0, 900.0))
+}
 /// Ignore tray clicks that arrive right after the popover auto-hid on blur,
 /// so the same click does not instantly reopen it (toggle semantics).
 const CHART_REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// Recreate the panel webview from scratch. Recover even from a crashed
+/// renderer, where an in-page `location.reload()` would never run. The new
+/// window is created on the main thread after a short delay so the old
+/// WebView2 instance is fully torn down first.
+pub fn recreate_panel(app: &AppHandle) {
+    let base = app.state::<AppState>().loaded_panel_url.lock().clone();
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.destroy();
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let inner = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            if let Some(base) = base {
+                let _ = create_panel(&inner, &base);
+            } else {
+                open_panel(&inner);
+            }
+        });
+    });
+}
+
+/// If the panel's external dashboard did not finish loading within this
+/// window of time, reload it once (white-screen self-healing).
+const PANEL_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn now_ms_u64() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Mark the panel webview as loaded (called from on_page_load).
+pub fn mark_panel_loaded(app: &AppHandle) {
+    let ms = now_ms_u64();
+    let st = app.state::<AppState>();
+    st.panel_load_ms.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Spawn a one-shot watchdog: if no successful page load was recorded after
+/// `PANEL_LOAD_TIMEOUT`, reload the panel once. Started on every open/create.
+pub fn spawn_panel_watchdog(app: &AppHandle) {
+    let handle = app.clone();
+    let before = handle
+        .state::<AppState>()
+        .panel_load_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
+    std::thread::spawn(move || {
+        std::thread::sleep(PANEL_LOAD_TIMEOUT);
+        let Some(window) = handle.get_webview_window("main") else { return };
+        let loaded = handle
+            .state::<AppState>()
+            .panel_load_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if loaded > before || !window.is_visible().unwrap_or(false) {
+            return;
+        }
+        let _ = window.eval("location.reload()");
+    });
+}
+
+/// Periodic panel health check: while the panel is visible, a navigation
+/// that started but never finished within 30s triggers one reload (with a
+/// per-reload cooldown). Runs forever from a background thread.
+pub fn panel_watchdog_tick(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let st = app.state::<AppState>();
+    let now = now_ms_u64();
+    let started = st.panel_load_started_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let loaded = st.panel_load_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let last_reload = st.panel_reload_ms.load(std::sync::atomic::Ordering::Relaxed);
+    if started > loaded
+        && now.saturating_sub(started) > 30_000
+        && now.saturating_sub(last_reload) > 60_000
+    {
+        // 熔断:连续重建 3 次仍未加载成功就停止,避免无限循环
+        let streak = st
+            .panel_recreate_streak
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if streak >= 3 {
+            return;
+        }
+        st.panel_reload_ms
+            .store(now, std::sync::atomic::Ordering::Relaxed);
+        // 页面可能已挂死,eval 的 reload 未必能执行——直接重建面板 webview。
+        recreate_panel(app);
+    }
+}
+
+/// Start the periodic watchdog thread (once, from setup).
+pub fn spawn_panel_watchdog_loop(app: &AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(15));
+        panel_watchdog_tick(&handle);
+    });
+}
 
 /// Open (or focus) the main window showing the Komari dashboard at the
 /// configured backend URL. Falls back to settings when unconfigured.
@@ -33,6 +141,7 @@ pub fn open_panel(app: &AppHandle) {
             let _ = window.show();
             let _ = window.unminimize();
             let _ = window.set_focus();
+            spawn_panel_watchdog(app);
         }
         None => {
             let _ = create_panel(app, &base);
@@ -63,15 +172,35 @@ fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
         .title("Hotaru Panel")
         .inner_size(1200.0, 800.0)
         .min_inner_size(780.0, 560.0)
+        .on_page_load(|webview, payload| {
+            let app = webview.app_handle();
+            let st = app.state::<AppState>();
+            let now = now_ms_u64();
+            match payload.event() {
+                tauri::webview::PageLoadEvent::Started => st
+                    .panel_load_started_ms
+                    .store(now, std::sync::atomic::Ordering::Relaxed),
+                tauri::webview::PageLoadEvent::Finished => {
+                    st.panel_load_ms
+                        .store(now, std::sync::atomic::Ordering::Relaxed);
+                    // 加载成功,重置重建熔断计数
+                    st.panel_recreate_streak
+                        .store(0, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        })
         .build()?;
     *app.state::<AppState>().loaded_panel_url.lock() = Some(base.to_string());
     let _ = window.set_focus();
+    spawn_panel_watchdog(app);
     Ok(())
 }
 
 /// Open (or toggle) the chart popover anchored to the tray icon. The icon
 /// rect comes from the tray click event, in physical pixels. A pinned
-/// popover keeps its dragged position instead of re-anchoring.
+/// popover keeps its dragged position instead of re-anchoring. Closing
+/// DESTROYS the window so a wedged webview can never linger: every open
+/// starts with a fresh one.
 pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
     let (ix, iy, iw, ih) = icon_rect;
     let center_x = ix + iw / 2.0;
@@ -91,21 +220,31 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
         return;
     }
 
+    let node_count = st.snapshot.read().nodes.len();
+    let (cw, ch) = chart_logical_size(node_count);
+
     let window = match app.get_webview_window("chart") {
         Some(window) => {
             if window.is_visible().unwrap_or(false) {
+                // Toggle-close: hide is a native op and always works, even
+                // with a wedged webview. Reopening reloads the page, which
+                // self-heals it — no destroy/create race involved.
                 let _ = window.hide();
                 return;
             }
             if !pinned {
-                position_chart(app, &window, center_x, iy, iy + ih);
+                position_chart(app, &window, center_x, iy, iy + ih, ch);
             }
+            // Reopen after hide: reload the local page so a hung webview
+            // recovers instead of showing a frozen popover.
+            let _ = window.eval("location.reload()");
+            let _ = window.set_size(tauri::LogicalSize::new(cw, ch));
             window
         }
         None => {
             let Ok(window) = WebviewWindowBuilder::new(app, "chart", WebviewUrl::App("chart.html".into()))
                 .title("Hotaru")
-                .inner_size(CHART_SIZE.0, CHART_SIZE.1)
+                .inner_size(cw, ch)
                 .decorations(false)
                 .transparent(true)
                 .always_on_top(true)
@@ -117,7 +256,7 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
             else {
                 return;
             };
-            position_chart(app, &window, center_x, iy, iy + ih);
+            position_chart(app, &window, center_x, iy, iy + ih, ch);
             window
         }
     };
@@ -126,17 +265,25 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
     let _ = window.set_focus();
 }
 
+/// Close the chart popover from the Rust side (blur timeout / close
+/// request). Hide is a native operation and always works; the popover page
+/// reloads itself on the next open.
+pub fn close_chart(window: &tauri::Window) {
+    let _ = window.hide();
+}
+
 fn position_chart(
     app: &AppHandle,
     window: &WebviewWindow,
     center_x: f64,
     icon_top: f64,
     icon_bottom: f64,
+    logical_h: f64,
 ) {
     let monitor = monitor_containing(app, center_x, icon_top);
     let Some(monitor) = monitor else { return };
     let scale = monitor.scale_factor();
-    let (w, h) = (CHART_SIZE.0 * scale, CHART_SIZE.1 * scale);
+    let (w, h) = (320.0 * scale, logical_h * scale);
     let gap = 6.0 * scale;
 
     let mp = monitor.position();

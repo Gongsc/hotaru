@@ -52,11 +52,12 @@ pub fn get_net_history(state: State<'_, AppState>, range_secs: u64) -> NetHistor
 
     let mut nodes: BTreeMap<String, Vec<NetPoint>> = BTreeMap::new();
     for f in &frames {
-        for (uuid, up, down) in &f.nodes {
+        for (uuid, up, down, online) in &f.nodes {
             nodes.entry(uuid.clone()).or_default().push(NetPoint {
                 t: f.t,
                 up: *up,
                 down: *down,
+                online: *online,
             });
         }
     }
@@ -64,8 +65,9 @@ pub fn get_net_history(state: State<'_, AppState>, range_secs: u64) -> NetHistor
     NetHistoryPayload {
         aggregate: downsample(&frames.iter().map(|f| NetPoint {
             t: f.t,
-            up: f.nodes.iter().map(|(_, up, _)| up).sum(),
-            down: f.nodes.iter().map(|(_, _, down)| down).sum(),
+            up: f.nodes.iter().map(|(_, up, _, _)| up).sum(),
+            down: f.nodes.iter().map(|(_, _, down, _)| down).sum(),
+            online: true,
         }).collect::<Vec<_>>()),
         nodes: nodes
             .into_iter()
@@ -88,6 +90,7 @@ fn downsample(points: &[NetPoint]) -> Vec<NetPoint> {
                 t: chunk[chunk.len() / 2].t,
                 up: chunk.iter().map(|p| p.up).sum::<f64>() / n,
                 down: chunk.iter().map(|p| p.down).sum::<f64>() / n,
+                online: chunk.iter().any(|p| p.online),
             }
         })
         .collect()
@@ -193,12 +196,87 @@ pub fn get_chart_pinned(state: State<'_, AppState>) -> bool {
         .load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[derive(Serialize)]
+pub struct PingPoint {
+    /// Epoch milliseconds.
+    pub t: u64,
+    /// Latency in ms; negative means the probe was lost.
+    pub v: f64,
+}
+
+/// Proxy the backend's ping-monitor records for one node, so the webview
+/// never has to talk cross-origin to the backend.
+#[tauri::command]
+pub async fn get_ping_records(
+    state: State<'_, AppState>,
+    uuid: String,
+    hours: u64,
+) -> Result<Vec<PingPoint>, String> {
+    let s = state.settings.read().clone().sanitized();
+    let base = normalize_base(&s.backend_url)?;
+    let hours = hours.clamp(1, 24);
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(s.accept_invalid_certs)
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.get(format!("{base}/api/records/ping?uuid={uuid}&hours={hours}"));
+    if !s.api_key.is_empty() {
+        req = req.bearer_auth(&s.api_key);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    if let Some(records) = body.pointer("/data/records").and_then(|v| v.as_array()) {
+        for r in records {
+            let v = r.get("value").and_then(|x| x.as_f64()).unwrap_or(0.0);
+            let time = r.get("time").and_then(|x| x.as_str()).unwrap_or("");
+            if let Some(t) = parse_rfc3339_ms(time) {
+                out.push(PingPoint { t, v });
+            }
+        }
+    }
+    out.sort_by_key(|p| p.t);
+    Ok(out)
+}
+
+/// Minimal RFC3339 UTC parser ("2026-08-29T16:50:00Z", fractional seconds
+/// allowed but ignored) — avoids pulling a full date-time crate.
+fn parse_rfc3339_ms(s: &str) -> Option<u64> {
+    if s.len() < 19 {
+        return None;
+    }
+    let num = |a: usize, b: usize| s.get(a..b)?.parse::<i64>().ok();
+    let y = num(0, 4)?;
+    let mo = num(5, 7)?;
+    let d = num(8, 10)?;
+    let h = num(11, 13)?;
+    let mi = num(14, 16)?;
+    let sec = num(17, 19)?;
+    let days = days_from_civil(y, mo, d);
+    Some(((days * 86400 + h * 3600 + mi * 60 + sec) * 1000) as u64)
+}
+
+/// Howard Hinnant's days_from_civil: days since 1970-01-01 for a civil date.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn pt(t: u64, up: f64) -> NetPoint {
-        NetPoint { t, up, down: up }
+        NetPoint { t, up, down: up, online: true }
     }
 
     #[test]
@@ -216,5 +294,19 @@ mod tests {
         assert_eq!(out.len(), 500);
         assert!((out[0].up - 0.5).abs() < 1e-9);
         assert!((out[1].up - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rfc3339_parse_epoch() {
+        assert_eq!(parse_rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_rfc3339_ms("1970-01-02T00:00:00Z"), Some(86_400_000));
+        // 2024-02-29 (leap day) 00:00 UTC
+        assert_eq!(parse_rfc3339_ms("2024-02-29T00:00:00Z"), Some(1_709_164_800_000));
+        // fractional seconds ignored
+        assert_eq!(
+            parse_rfc3339_ms("2024-02-29T00:00:00.123456Z"),
+            Some(1_709_164_800_000)
+        );
+        assert_eq!(parse_rfc3339_ms("not-a-date"), None);
     }
 }

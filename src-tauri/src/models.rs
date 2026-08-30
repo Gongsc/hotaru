@@ -73,6 +73,11 @@ pub struct NodeSnapshot {
     pub uuid: String,
     pub name: String,
     pub online: bool,
+    #[serde(default)]
+    pub region: String,
+    /// e.g. "windows" / "linux" / "darwin".
+    #[serde(default)]
+    pub os: String,
     pub cpu_usage: f64,
     pub ram_used: u64,
     pub ram_total: u64,
@@ -133,15 +138,18 @@ pub struct NetPoint {
     pub up: f64,
     /// B/s summed over all nodes.
     pub down: f64,
+    /// Aggregate points are always `true`; per-node points carry the node's
+    /// online state at sample time.
+    pub online: bool,
 }
 
 /// One history frame: a timestamp plus every node's rates at that moment.
-/// `(uuid, up B/s, down B/s)` per entry.
+/// `(uuid, up B/s, down B/s, online)` per entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NetFrame {
     /// Epoch milliseconds.
     pub t: u64,
-    pub nodes: Vec<(String, f64, f64)>,
+    pub nodes: Vec<(String, f64, f64, bool)>,
 }
 
 /// Nodes covered by the current tray mode: all nodes, or the pinned one
@@ -453,7 +461,7 @@ pub struct Conns {
     pub udp: Option<u64>,
 }
 
-pub fn report_to_snapshot(uuid: &str, name: &str, online: bool, r: &Report) -> NodeSnapshot {
+pub fn report_to_snapshot(uuid: &str, name: &str, region: &str, os: &str, online: bool, r: &Report) -> NodeSnapshot {
     NodeSnapshot {
         uuid: uuid.to_string(),
         name: if name.is_empty() {
@@ -462,6 +470,8 @@ pub fn report_to_snapshot(uuid: &str, name: &str, online: bool, r: &Report) -> N
             name.to_string()
         },
         online,
+        region: region.to_string(),
+        os: os.to_string(),
         cpu_usage: r.cpu.as_ref().and_then(|c| c.usage).unwrap_or(0.0),
         ram_used: r.ram.as_ref().and_then(|m| m.used).unwrap_or(0),
         ram_total: r.ram.as_ref().and_then(|m| m.total).unwrap_or(0),
@@ -553,7 +563,7 @@ mod tests {
         assert_eq!(payload.online, vec!["uuid-1".to_string()]);
         assert_eq!(payload.data.len(), 2);
         let rep = payload.data.get("uuid-1").unwrap();
-        let snap = report_to_snapshot("uuid-1", names.get("uuid-1").unwrap(), true, rep);
+        let snap = report_to_snapshot("uuid-1", names.get("uuid-1").unwrap(), "", "", true, rep);
         assert_eq!(snap.name, "node-1");
         assert!((snap.cpu_usage - 42.5).abs() < 1e-9);
         assert_eq!(snap.ram_used, 4294967296);
@@ -561,7 +571,7 @@ mod tests {
         assert_eq!(snap.tcp, 120);
         // unknown node gets a fallback name
         let rep2 = payload.data.get("uuid-2").unwrap();
-        let snap2 = report_to_snapshot("uuid-2", "", false, rep2);
+        let snap2 = report_to_snapshot("uuid-2", "", "", "", false, rep2);
         assert_eq!(snap2.name, "节点 uuid-2");
         assert_eq!(snap2.uptime_secs, 0);
     }
@@ -577,7 +587,7 @@ mod tests {
             .iter()
             .map(|(uuid, rep)| {
                 let online = payload.online.iter().any(|o| o == uuid);
-                report_to_snapshot(uuid, names.get(uuid).map(|s| s.as_str()).unwrap_or(""), online, rep)
+                report_to_snapshot(uuid, names.get(uuid).map(|s| s.as_str()).unwrap_or(""), "", "", online, rep)
             })
             .collect();
         let agg = aggregate(&nodes.iter().collect::<Vec<_>>());
@@ -692,6 +702,8 @@ mod tests {
             Self {
                 uuid: "u".into(),
                 name: "n".into(),
+                region: String::new(),
+                os: String::new(),
                 online: true,
                 cpu_usage: 0.0,
                 ram_used: 0,

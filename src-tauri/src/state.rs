@@ -58,6 +58,11 @@ pub struct AppState {
     pub chart_hidden_at: Mutex<Option<std::time::Instant>>,
     /// Chart popover "pinned" (keep open on blur, keep dragged position).
     pub chart_pinned: std::sync::atomic::AtomicBool,
+    /// Epoch ms of the panel webview's last finished page load (watchdog).
+    pub panel_load_ms: std::sync::atomic::AtomicU64,
+    pub panel_load_started_ms: std::sync::atomic::AtomicU64,
+    pub panel_reload_ms: std::sync::atomic::AtomicU64,
+    pub panel_recreate_streak: std::sync::atomic::AtomicU64,
     /// Aggregate network samples; lives only for the current process run.
     pub net_history: NetHistory,
 }
@@ -79,6 +84,10 @@ pub fn init(app: &AppHandle) -> AppState {
         loaded_panel_url: Mutex::new(None),
         chart_hidden_at: Mutex::new(None),
         chart_pinned: std::sync::atomic::AtomicBool::new(false),
+        panel_load_ms: std::sync::atomic::AtomicU64::new(0),
+        panel_load_started_ms: std::sync::atomic::AtomicU64::new(0),
+        panel_reload_ms: std::sync::atomic::AtomicU64::new(0),
+        panel_recreate_streak: std::sync::atomic::AtomicU64::new(0),
         net_history: NetHistory::default(),
     }
 }
@@ -88,7 +97,7 @@ mod tests {
     use super::*;
 
     fn frame(t: u64, up: f64) -> NetFrame {
-        NetFrame { t, nodes: vec![("a".into(), up, up * 2.0)] }
+        NetFrame { t, nodes: vec![("a".into(), up, up * 2.0, true)] }
     }
 
     #[test]
@@ -122,11 +131,11 @@ mod tests {
         let hist = NetHistory::default();
         hist.push(NetFrame {
             t: 1000,
-            nodes: vec![("a".into(), 1.0, 2.0), ("b".into(), 3.0, 4.0)],
+            nodes: vec![("a".into(), 1.0, 2.0, true), ("b".into(), 3.0, 4.0, false)],
         });
         hist.push(NetFrame {
             t: 2000,
-            nodes: vec![("a".into(), 5.0, 6.0)],
+            nodes: vec![("a".into(), 5.0, 6.0, true)],
         });
         let frames = hist.since(0);
         assert_eq!(frames.len(), 2);

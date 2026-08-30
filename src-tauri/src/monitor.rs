@@ -136,9 +136,12 @@ pub fn parse_ws_text(txt: &str, nodes: &HashMap<String, ClientInfo>) -> Option<M
         .data
         .iter()
         .map(|(uuid, rep)| {
-            let name = nodes.get(uuid).map(|c| c.name.as_str()).unwrap_or("");
+            let info = nodes.get(uuid);
+            let name = info.map(|c| c.name.as_str()).unwrap_or("");
+            let region = info.map(|c| c.region.as_str()).unwrap_or("");
+            let os = info.map(|c| c.os.as_str()).unwrap_or("");
             let online = payload.online.iter().any(|o| o == uuid);
-            report_to_snapshot(uuid, name, online, rep)
+            report_to_snapshot(uuid, name, region, os, online, rep)
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -186,7 +189,7 @@ async fn http_loop(
                         Ok(resp) if resp.status().is_success() => match resp.json::<Envelope<Vec<Report>>>().await {
                             Ok(env) => match env.data {
                                 Some(reports) if !reports.is_empty() => {
-                                    report_to_snapshot(uuid, &info.name, true, reports.last().unwrap())
+                                    report_to_snapshot(uuid, &info.name, &info.region, &info.os, true, reports.last().unwrap())
                                 }
                                 _ => offline_snapshot(uuid, info),
                             },
@@ -208,7 +211,7 @@ async fn http_loop(
 }
 
 fn offline_snapshot(uuid: &str, info: &ClientInfo) -> NodeSnapshot {
-    report_to_snapshot(uuid, &info.name, false, &Report::default())
+    report_to_snapshot(uuid, &info.name, &info.region, &info.os, false, &Report::default())
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +264,7 @@ fn publish(app: &AppHandle, snap: MonitorSnapshot, last_tray: &mut Instant) {
         let nodes = snap
             .nodes
             .iter()
-            .map(|n| (n.uuid.clone(), n.net_up, n.net_down))
+            .map(|n| (n.uuid.clone(), n.net_up, n.net_down, n.online))
             .collect();
         st.net_history.push(NetFrame { t: snap.last_update_ms, nodes });
     }

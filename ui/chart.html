@@ -15,6 +15,7 @@
     --up: #38bdf8;
     --down: #34d399;
     --warn: #f87171;
+    --amber: #fbbf24;
     --off: #9d9da1;
   }
   @media (prefers-color-scheme: dark) {
@@ -60,22 +61,23 @@
   .legend .k { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
   .k.up { background: var(--up); } .k.down { background: var(--down); }
   .legend b { font-weight: 600; }
+  .totals { padding: 1px 14px 0; font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
   canvas#chart { display: block; width: 292px; height: 112px; margin: 6px auto 2px; flex: none; }
 
   .sec-label { font-size: 11px; font-weight: 600; color: var(--ink-2); letter-spacing: .05em; padding: 6px 14px 4px; flex: none; }
   .nodes { flex: 1; min-height: 0; overflow: hidden; padding: 0 12px 6px; }
-  .nodes .empty { color: var(--ink-2); font-size: 12px; text-align: center; padding: 18px 0; }
 
-  /* 数据源单选行（与托盘「托盘数据源」同步） */
-  .nrow { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 8px;
+  .nrow { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px;
           border-radius: 7px; cursor: pointer; }
   .nrow:hover { background: var(--btn); }
-  .radio { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid var(--ink-2);
-           flex: none; position: relative; }
-  .nrow.sel .radio { border-color: var(--down); }
-  .nrow.sel .radio::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: var(--down); }
+  .nrow .flag { flex: none; width: 18px; text-align: center; }
+  .nrow .flag img { width: 18px; height: 12px; border-radius: 2px; display: inline-block; vertical-align: -1px; }
+  .nrow .flag .code { font-size: 9.5px; font-weight: 600; color: var(--ink-2); }
+  .nrow .os { flex: none; width: 13px; height: 13px; color: var(--ink-2); display: flex; align-items: center; }
+  .nrow .os svg { width: 13px; height: 13px; }
+  .nrow .os img { width: 13px; height: 13px; }
   .nrow .name { flex: 1; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .nrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--down); flex: none; }
+  .nrow .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--down); }
   .nrow .dot.off { background: var(--off); }
   .nrow .chev { flex: none; width: 14px; text-align: center; font-size: 10px; color: var(--ink-2);
                 transition: transform .15s; }
@@ -84,6 +86,8 @@
   .card { margin-bottom: 2px; }
   .nbody { display: none; padding: 2px 8px 8px; }
   .card.open > .nbody { display: block; }
+  .meta-line { display: flex; gap: 12px; font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; padding: 2px 0 3px; }
+  .meta-line b { color: var(--ink); font-weight: 600; }
   .nbody .rates { font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; padding: 2px 0 3px; }
   canvas.mini { display: block; width: 100%; height: 54px; }
   .bar-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-2); margin-top: 6px; }
@@ -93,6 +97,15 @@
   .bar.mem i { background: var(--down); }
   .bar.hot i { background: var(--warn); }
   .bar-row .pv { width: 38px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .stat { margin-top: 8px; display: grid; gap: 4px; }
+  .stat-row { display: flex; align-items: center; gap: 7px; }
+  .stat-lbl { flex: none; width: 30px; font-size: 10.5px; color: var(--ink-2); }
+  .cells { flex: 1; display: flex; gap: 3px; }
+  .cells i { flex: 1; height: 13px; border-radius: 2.5px; background: var(--chip); }
+  .cells i.g { background: var(--down); }
+  .cells i.a { background: var(--amber); }
+  .cells i.r { background: var(--warn); }
 
   .pf { display: flex; gap: 8px; padding: 8px 12px 12px; flex: none; }
   .pf button {
@@ -121,9 +134,10 @@
     <span><i class="k up"></i>上行 <b id="up-now">—</b></span>
     <span><i class="k down"></i>下行 <b id="down-now">—</b></span>
   </div>
+  <div class="totals">累计流量 ↑ <b id="total-up">—</b> · ↓ <b id="total-down">—</b></div>
   <canvas id="chart"></canvas>
-  <div class="sec-label">节点 · 数据源</div>
-  <div class="nodes" id="nodes"><div class="empty">等待数据…</div></div>
+  <div class="sec-label">节点</div>
+  <div class="nodes" id="nodes"><div class="empty" style="color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;">等待数据…</div></div>
   <div class="pf">
     <button id="btn-panel">打开面板</button>
     <button id="btn-settings">设置…</button>
@@ -139,24 +153,39 @@ const { LogicalSize } = window.__TAURI__.dpi;
 const RANGE_LABELS = { 300: '5 分钟', 900: '15 分钟', 3600: '1 小时', 21600: '6 小时' };
 const FRONT_BUFFER_MS = 6 * 3600 * 1000;
 const MIN_POPOVER_H = 300, MAX_POPOVER_H = 900;
+const GRID_BUCKETS = 12, GRID_BUCKET_MS = 5 * 60 * 1000; // 12 × 5min = 1h
 
 let rangeSecs = 900;
 let cpuWarnPct = 80, memWarnPct = 85;
-let settingsCache = null;
 let points = [];                 // aggregate [{t, up, down}]
-let nodeSeries = new Map();      // uuid -> [{t, up, down}]
-let nodeMeta = new Map();        // uuid -> {name, online, cpu, memPct}
-let traySource = { mode: 'aggregate', pinned: '' };
+let nodeSeries = new Map();      // uuid -> [{t, up, down, online}]
+let nodeMeta = new Map();        // uuid -> {name, online, cpu, memPct, uptime, region, os}
 let expandedUuid = null;         // accordion: which node card is open
 let lastDraw = 0;
 let backendOk = true;
 let onlineCount = null;
-let cardsBuilt = false;
+let totalUp = 0, totalDown = 0;
 
 function fmtRate(bps) {
   if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
   if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
   return bps.toFixed(0) + ' B/s';
+}
+
+function fmtBytes(b) {
+  if (b >= 1099511627776) return (b / 1099511627776).toFixed(2) + ' TB';
+  if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+  if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+  if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+  return b.toFixed(0) + ' B';
+}
+
+function fmtUptime(s) {
+  s = Math.max(0, Math.floor(s));
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return d + '天' + h + '小时';
+  if (h > 0) return h + '小时' + m + '分钟';
+  return m + '分钟';
 }
 
 function fmtAgo(ms) {
@@ -179,6 +208,68 @@ function niceCeil(v) {
   return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * e;
 }
 
+// --- 地区 -> 国旗 ------------------------------------------------------------
+// Windows 不渲染国旗 emoji(区域指示符只显示为字母),统一改用 flagcdn
+// 图片;离线/加载失败时降级为两位代码徽章。
+
+const REGION_CODES = {
+  '美国': 'US', '日本': 'JP', '香港': 'HK', '台湾': 'TW', '韩国': 'KR', '新加坡': 'SG',
+  '英国': 'GB', '德国': 'DE', '法国': 'FR', '加拿大': 'CA', '澳大利亚': 'AU', '澳洲': 'AU',
+  '俄罗斯': 'RU', '印度': 'IN', '荷兰': 'NL', '土耳其': 'TR', '巴西': 'BR', '中国': 'CN',
+  '阿联酋': 'AE', '意大利': 'IT', '西班牙': 'ES', '波兰': 'PL', '瑞士': 'CH', '瑞典': 'SE',
+  '芬兰': 'FI', '挪威': 'NO', '马来西亚': 'MY', '泰国': 'TH', '越南': 'VN', '菲律宾': 'PH',
+  '印尼': 'ID', '阿根廷': 'AR', '墨西哥': 'MX', '南非': 'ZA', '乌克兰': 'UA', '爱尔兰': 'IE',
+  'united states': 'US', 'japan': 'JP', 'hong kong': 'HK', 'taiwan': 'TW', 'korea': 'KR',
+  'singapore': 'SG', 'united kingdom': 'GB', 'germany': 'DE', 'france': 'FR', 'canada': 'CA',
+  'australia': 'AU', 'russia': 'RU', 'india': 'IN', 'netherlands': 'NL', 'turkey': 'TR',
+  'brazil': 'BR', 'china': 'CN',
+};
+
+function countryCodeOf(region) {
+  const r = (region || '').trim();
+  if (!r) return '';
+  // Komari 常直接存 emoji 旗帜(如 "🇺🇸"),还原为两位代码
+  const emoji = r.match(/([\u{1F1E6}-\u{1F1FF}])([\u{1F1E6}-\u{1F1FF}])/u);
+  if (emoji) {
+    const code = String.fromCodePoint(
+      emoji[1].codePointAt(0) - 0x1F1E6 + 65,
+      emoji[2].codePointAt(0) - 0x1F1E6 + 65,
+    );
+    if (/^[A-Z]{2}$/.test(code)) return code;
+  }
+  const m = r.toUpperCase().match(/(?:^|[^A-Z])([A-Z]{2})(?:$|[^A-Z])/);
+  const code = REGION_CODES[r.toLowerCase()] || (m && m[1]);
+  return code && /^[A-Z]{2}$/.test(code) ? code : '';
+}
+
+const OS_SVG = {
+  windows: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.55 10.6 4.5v6.9H3zM11.6 4.35 21 3v8.4h-9.4zM3 12.6h7.6v6.9L3 18.45zM11.6 12.6H21V21l-9.4-1.35z"/></svg>',
+  apple: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 12.9c0-2.2 1.8-3.3 1.9-3.4-1-1.5-2.6-1.7-3.2-1.7-1.4-.1-2.7.8-3.4.8-.7 0-1.8-.8-2.9-.8-1.5 0-2.9.9-3.7 2.2-1.6 2.7-.4 6.8 1.1 9 .7 1.1 1.6 2.3 2.8 2.2 1.1 0 1.5-.7 2.9-.7 1.3 0 1.7.7 2.9.7 1.2 0 2-1.1 2.7-2.2.9-1.2 1.2-2.4 1.2-2.5 0 0-2.3-.9-2.3-3.6zM14.4 5.6c.6-.8 1.1-1.8 1-2.9-.9 0-2.1.6-2.7 1.4-.6.7-1.2 1.8-1 2.8 1 .1 2-.5 2.7-1.3z"/></svg>',
+  linux: '<span style="font-size:12px;line-height:1">🐧</span>',
+};
+
+// 常见发行版 -> simple-icons CDN 图标;加载失败降级为 🐧
+const DISTRO_SLUGS = [
+  ['ubuntu', 'ubuntu'], ['debian', 'debian'], ['arch', 'archlinux'], ['manjaro', 'manjaro'],
+  ['centos', 'centos'], ['rocky', 'rockylinux'], ['alma', 'almalinux'], ['alpine', 'alpinelinux'],
+  ['fedora', 'fedora'], ['opensuse', 'opensuse'], ['suse', 'opensuse'], ['kali', 'kalilinux'],
+  ['raspbian', 'raspberrypi'], ['raspberry', 'raspberrypi'], ['nixos', 'nixos'], ['deepin', 'deepin'],
+  ['oracle', 'oracle'], ['amzn', 'amazonaws'], ['red hat', 'redhat'], ['rhel', 'redhat'],
+];
+
+function osIcon(os) {
+  const s = (os || '').toLowerCase();
+  if (s.includes('win')) return OS_SVG.windows;
+  if (s.includes('darwin') || s.includes('mac') || s.includes('apple') || s.includes('osx') || s.includes('ios')) return OS_SVG.apple;
+  for (const [key, slug] of DISTRO_SLUGS) {
+    if (s.includes(key)) {
+      return '<img src="https://cdn.simpleicons.org/' + slug + '" alt="" onerror="this.outerHTML=\'🐧\'">';
+    }
+  }
+  if (s.includes('linux') || s.includes('unix') || s.includes('bsd')) return OS_SVG.linux;
+  return '';
+}
+
 function renderHeader() {
   document.getElementById('title').innerHTML = backendOk
     ? '汇总<small>在线 ' + (onlineCount == null ? '…' : onlineCount) + '</small>'
@@ -186,6 +277,8 @@ function renderHeader() {
   const last = points[points.length - 1];
   document.getElementById('up-now').textContent = last ? fmtRate(last.up) : '—';
   document.getElementById('down-now').textContent = last ? fmtRate(last.down) : '—';
+  document.getElementById('total-up').textContent = totalUp ? '↑ ' + fmtBytes(totalUp) : '—';
+  document.getElementById('total-down').textContent = totalDown ? '↓ ' + fmtBytes(totalDown) : '—';
   document.getElementById('range-chip').textContent =
     RANGE_LABELS[rangeSecs] || Math.round(rangeSecs / 60) + ' 分钟';
 }
@@ -331,36 +424,14 @@ function drawMini(cv, series) {
   strokeSeries(ctx, data, xOf, yOf, padT, ph);
 }
 
-// --- 数据源选择（与托盘「托盘数据源」同步） --------------------------------
-
-async function selectSource(mode, pinned) {
-  if (traySource.mode === mode && traySource.pinned === pinned) return;
-  const prev = traySource;
-  traySource = { mode, pinned };
-  if (mode === 'node' && pinned) expandedUuid = pinned;
-  renderNodes();
-  try {
-    let base = settingsCache;
-    if (!base) base = await invoke('get_settings');
-    settingsCache = await invoke('save_settings', {
-      settings: { ...base, tray_mode: mode, pinned_uuid: pinned },
-    });
-  } catch (e) {
-    traySource = prev; // revert on failure
-    renderNodes();
-  }
-}
-
 // --- 折叠节点列表 -----------------------------------------------------------
 
 let nodesKey = null;
 
 function nodesKeyOf() {
-  return [...nodeMeta.keys()].join(',') + '|' + traySource.mode + '|' +
-    traySource.pinned + '|' + expandedUuid;
+  return [...nodeMeta.keys()].join(',') + '|' + expandedUuid;
 }
 
-// 结构变化（节点集/选择/展开）时整表重建；否则只做增量补丁
 function syncNodes() {
   const key = nodesKeyOf();
   if (key !== nodesKey) {
@@ -381,18 +452,11 @@ function buildNodes() {
   const container = document.getElementById('nodes');
   container.innerHTML = '';
 
-  // 数据源行：汇总全部节点
-  const modeRow = document.createElement('div');
-  modeRow.className = 'nrow' + (traySource.mode === 'aggregate' ? ' sel' : '');
-  modeRow.id = 'mode-row';
-  modeRow.innerHTML = '<span class="radio"></span><span class="name">汇总全部节点</span>';
-  modeRow.addEventListener('click', () => selectSource('aggregate', ''));
-  container.appendChild(modeRow);
-
   const uuids = [...nodeMeta.keys()];
   if (!uuids.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
+    empty.style.cssText = 'color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;';
     empty.textContent = '暂无节点';
     container.appendChild(empty);
     fitHeight();
@@ -401,90 +465,146 @@ function buildNodes() {
 
   for (const uuid of uuids) {
     const meta = nodeMeta.get(uuid);
-    const sel = traySource.mode === 'node' && traySource.pinned === uuid;
     const open = expandedUuid === uuid;
 
     const card = document.createElement('div');
     card.className = 'card' + (open ? ' open' : '');
 
     const row = document.createElement('div');
-    row.className = 'nrow' + (sel ? ' sel' : '');
-    row.innerHTML = '<span class="radio"></span><span class="dot' + (meta.online ? '' : ' off') +
-      '"></span><span class="name"></span><span class="chev">▶</span>';
+    row.className = 'nrow';
+    row.innerHTML = '<span class="flag"></span><span class="os"></span>' +
+      '<span class="dot' + (meta.online ? '' : ' off') + '"></span>' +
+      '<span class="name"></span><span class="chev">▶</span>';
+    const code = countryCodeOf(meta.region);
+    const flagEl = row.querySelector('.flag');
+    if (code) {
+      // flagcdn 旗帜图;加载失败降级为代码徽章
+      flagEl.innerHTML = '<img alt="" src="https://flagcdn.com/w40/' + code.toLowerCase() + '.png">' +
+        '<span class="code" style="display:none">' + code + '</span>';
+      const img = flagEl.querySelector('img');
+      img.addEventListener('error', () => {
+        img.remove();
+        flagEl.querySelector('.code').style.display = '';
+      });
+    }
+    const osEl = row.querySelector('.os');
+    const os = osIcon(meta.os);
+    if (os) osEl.innerHTML = os; else osEl.remove();
     row.querySelector('.name').textContent = meta.name;
     row.querySelector('.name').title = meta.name;
-    // 点击名称行 = 展开/收起；点击圆点 = 选择数据源
-    row.addEventListener('click', (e) => {
-      if (e.target.closest('.radio')) return;
+    row.addEventListener('click', () => {
       expandedUuid = open ? null : uuid;
       syncNodes();
       lastDraw = 0;
       scheduleDraw();
-    });
-    row.querySelector('.radio').addEventListener('click', (e) => {
-      e.stopPropagation();
-      selectSource('node', uuid);
+      if (expandedUuid) fetchPing(expandedUuid);
     });
     card.appendChild(row);
 
     const body = document.createElement('div');
     body.className = 'nbody';
     body.innerHTML =
+      '<div class="meta-line"><span>在线时长 <b class="up-t">—</b></span></div>' +
       '<div class="rates">—</div>' +
       '<canvas class="mini"></canvas>' +
       '<div class="bar-row"><span class="lbl">CPU</span><div class="bar cpu"><i></i></div><span class="pv">—</span></div>' +
-      '<div class="bar-row"><span class="lbl">内存</span><div class="bar mem"><i></i></div><span class="pv">—</span></div>';
+      '<div class="bar-row"><span class="lbl">内存</span><div class="bar mem"><i></i></div><span class="pv">—</span></div>' +
+      '<div class="stat">' +
+      '  <div class="stat-row"><span class="stat-lbl">延迟</span><div class="cells row-lat"></div><span class="pv lat-now">—</span></div>' +
+      '  <div class="stat-row"><span class="stat-lbl">丢包</span><div class="cells row-loss"></div><span class="pv loss-now">—</span></div>' +
+      '</div>';
+    for (let i = 0; i < GRID_BUCKETS; i++) {
+      body.querySelector('.row-lat').appendChild(document.createElement('i'));
+      body.querySelector('.row-loss').appendChild(document.createElement('i'));
+    }
     card.appendChild(body);
 
     container.appendChild(card);
     card._refs = {
       row,
+      upt: body.querySelector('.up-t'),
       rates: body.querySelector('.rates'),
       canvas: body.querySelector('canvas.mini'),
       cpuBar: body.querySelector('.bar.cpu'),
       cpuPv: body.querySelectorAll('.pv')[0],
       memBar: body.querySelector('.bar.mem'),
       memPv: body.querySelectorAll('.pv')[1],
+      latNow: body.querySelector('.lat-now'),
+      lossNow: body.querySelector('.loss-now'),
+      rowLat: body.querySelector('.row-lat'),
+      rowLoss: body.querySelector('.row-loss'),
     };
   }
   fitHeight();
 }
 
-// 增量补丁：不重建 DOM，只更新勾选态、在线点和数值
+// 网络质量:后端 /api/records/ping(每 5 分钟一格,共 1 小时)。
+// 延迟行:绿 <100ms / 黄 <200ms / 红 ≥200ms;丢包行:绿 0% / 黄 ≤5% / 红 >5%。
+const pingSeries = new Map(); // uuid -> [{t, v}] v = 延迟 ms,负值表示该次探测丢包
+
+function renderPingGrid(uuid, refs) {
+  const now = Date.now();
+  const start = now - GRID_BUCKETS * GRID_BUCKET_MS;
+  const recs = (pingSeries.get(uuid) || []).filter((p) => p.t >= start);
+  const cnt = new Array(GRID_BUCKETS).fill(0);
+  const lossCnt = new Array(GRID_BUCKETS).fill(0);
+  const latSum = new Array(GRID_BUCKETS).fill(0);
+  const latCnt = new Array(GRID_BUCKETS).fill(0);
+  for (const p of recs) {
+    const b = Math.min(GRID_BUCKETS - 1, Math.max(0, Math.floor((p.t - start) / GRID_BUCKET_MS)));
+    cnt[b]++;
+    if (p.v >= 0) { latSum[b] += p.v; latCnt[b]++; } else { lossCnt[b]++; }
+  }
+  for (let b = 0; b < GRID_BUCKETS; b++) {
+    const lat = refs.rowLat.children[b], loss = refs.rowLoss.children[b];
+    if (!cnt[b]) { lat.className = ''; loss.className = ''; continue; }
+    const avg = latSum[b] / latCnt[b];
+    lat.className = !latCnt[b] ? 'r' : avg < 100 ? 'g' : avg < 200 ? 'a' : 'r';
+    const ratio = lossCnt[b] / cnt[b];
+    loss.className = ratio === 0 ? 'g' : ratio <= 0.05 ? 'a' : 'r';
+  }
+  // 汇总数值:延迟取最近一次成功探测;丢包取整小时比例
+  let lastLat = null, neg = 0;
+  for (const p of recs) { if (p.v >= 0) lastLat = p.v; else neg++; }
+  refs.latNow.textContent = lastLat == null ? '—' : Math.round(lastLat) + 'ms';
+  refs.lossNow.textContent = recs.length ? (neg / recs.length * 100).toFixed(1) + '%' : '—';
+}
+
+// 增量补丁：不重建 DOM，只更新在线点与数值
 function patchNodes() {
   const container = document.getElementById('nodes');
-  const modeRow = container.querySelector('#mode-row');
-  if (modeRow) {
-    modeRow.classList.toggle('sel', traySource.mode === 'aggregate');
-  }
   const cardEls = container.querySelectorAll('.card');
   const uuids = [...nodeMeta.keys()];
   cardEls.forEach((card, idx) => {
-    const uuid = uuids[idx];
-    const meta = nodeMeta.get(uuid);
-    if (!meta) return;
-    const r = card._refs;
-    r.row.classList.toggle('sel', traySource.mode === 'node' && traySource.pinned === uuid);
-    r.row.querySelector('.dot').className = 'dot' + (meta.online ? '' : ' off');
-    if (meta.online) {
-      const s = nodeSeries.get(uuid);
-      const last = s && s[s.length - 1];
-      r.rates.textContent = last ? '↑ ' + fmtRate(last.up) + ' · ↓ ' + fmtRate(last.down) : '—';
-      r.cpuPv.textContent = meta.cpu.toFixed(0) + '%';
-      r.memPv.textContent = meta.memPct.toFixed(0) + '%';
-      r.cpuBar.querySelector('i').style.width = Math.min(100, Math.max(0, meta.cpu)) + '%';
-      r.cpuBar.className = 'bar cpu' + (meta.cpu >= cpuWarnPct ? ' hot' : '');
-      r.memBar.querySelector('i').style.width = Math.min(100, Math.max(0, meta.memPct)) + '%';
-      r.memBar.className = 'bar mem' + (meta.memPct >= memWarnPct ? ' hot' : '');
-    } else {
-      r.rates.textContent = '离线';
-      r.cpuPv.textContent = '—';
-      r.memPv.textContent = '—';
-      r.cpuBar.querySelector('i').style.width = '0%';
-      r.cpuBar.className = 'bar cpu';
-      r.memBar.querySelector('i').style.width = '0%';
-      r.memBar.className = 'bar mem';
-    }
+    try {
+      const uuid = uuids[idx];
+      const meta = nodeMeta.get(uuid);
+      if (!meta) return;
+      const r = card._refs;
+      if (!r) return;
+      r.row.querySelector('.dot').className = 'dot' + (meta.online ? '' : ' off');
+      r.upt.textContent = meta.online ? fmtUptime(meta.uptime) : '—';
+      if (meta.online) {
+        const s = nodeSeries.get(uuid);
+        const last = s && s[s.length - 1];
+        r.rates.textContent = last ? '↑ ' + fmtRate(last.up) + ' · ↓ ' + fmtRate(last.down) : '—';
+        r.cpuPv.textContent = meta.cpu.toFixed(0) + '%';
+        r.memPv.textContent = meta.memPct.toFixed(0) + '%';
+        r.cpuBar.querySelector('i').style.width = Math.min(100, Math.max(0, meta.cpu)) + '%';
+        r.cpuBar.className = 'bar cpu' + (meta.cpu >= cpuWarnPct ? ' hot' : '');
+        r.memBar.querySelector('i').style.width = Math.min(100, Math.max(0, meta.memPct)) + '%';
+        r.memBar.className = 'bar mem' + (meta.memPct >= memWarnPct ? ' hot' : '');
+      } else {
+        r.rates.textContent = '离线';
+        r.cpuPv.textContent = '—';
+        r.memPv.textContent = '—';
+        r.cpuBar.querySelector('i').style.width = '0%';
+        r.cpuBar.className = 'bar cpu';
+        r.memBar.querySelector('i').style.width = '0%';
+        r.memBar.className = 'bar mem';
+      }
+      if (card.classList.contains('open')) renderPingGrid(uuid, r);
+    } catch (e) { console.error('patch card failed', e); }
   });
 }
 
@@ -498,7 +618,8 @@ function drawMinis() {
   });
 }
 
-// 弹窗高度随内容自适应(只受屏幕高度限制),节点区不出现滚动条
+// 弹窗高度随内容自适应(只受屏幕高度限制),节点区不出现滚动条。
+// setSize 与窗口初始化存在竞态,设置后校验实际高度,不符则重试。
 async function fitHeight() {
   const panel = document.getElementById('panel');
   panel.style.height = 'auto';
@@ -508,10 +629,16 @@ async function fitHeight() {
     const m = await win.currentMonitor();
     if (m && m.size && m.size.height) maxH = m.size.height - 80;
   } catch (e) { /* keep default cap */ }
-  const finalH = Math.min(Math.max(needed, MIN_POPOVER_H), Math.max(MIN_POPOVER_H, maxH));
+  const finalH = Math.round(Math.min(Math.max(needed, MIN_POPOVER_H), Math.max(MIN_POPOVER_H, maxH)));
   document.body.style.height = finalH + 'px';
   panel.style.height = '100%';
-  win.setSize(new LogicalSize(320, finalH)).catch(() => {});
+  if (window.__chartH === finalH) return;
+  window.__chartH = finalH;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await win.setSize(new LogicalSize(320, finalH)).catch(() => {});
+    await new Promise((r) => setTimeout(r, 120));
+    if (window.innerHeight === finalH) return;
+  }
 }
 
 function scheduleDraw() {
@@ -529,17 +656,22 @@ function ingestSnap(snap) {
   if (snap.backend_ok) {
     const t = snap.last_update_ms || Date.now();
     nodeMeta = new Map();
+    totalUp = 0; totalDown = 0;
     for (const n of snap.nodes) {
       nodeMeta.set(n.uuid, {
         name: n.name || n.uuid,
         online: !!n.online,
         cpu: n.cpu_usage,
         memPct: n.ram_total > 0 ? (n.ram_used / n.ram_total) * 100 : 0,
+        uptime: n.uptime_secs,
+        region: n.region || '',
+        os: n.os || '',
       });
+      totalUp += n.total_up; totalDown += n.total_down;
       let s = nodeSeries.get(n.uuid);
       if (!s) { s = []; nodeSeries.set(n.uuid, s); }
       if (!s.length || t > s[s.length - 1].t) {
-        s.push({ t, up: n.net_up, down: n.net_down });
+        s.push({ t, up: n.net_up, down: n.net_down, online: !!n.online });
         const cutoff = t - FRONT_BUFFER_MS;
         while (s.length && s[0].t < cutoff) s.shift();
       }
@@ -561,14 +693,9 @@ function ingestSnap(snap) {
 async function refresh() {
   try {
     const s = await invoke('get_settings');
-    settingsCache = s;
     if (s.chart_range_secs) rangeSecs = s.chart_range_secs;
     cpuWarnPct = s.cpu_warn_pct || 80;
     memWarnPct = s.mem_warn_pct || 85;
-    traySource = {
-      mode: s.tray_mode === 'node' ? 'node' : 'aggregate',
-      pinned: s.pinned_uuid || '',
-    };
   } catch (e) { /* keep current values */ }
   try {
     const payload = await invoke('get_net_history', { rangeSecs: 21600 });
@@ -578,25 +705,13 @@ async function refresh() {
     points = [];
     nodeSeries = new Map();
   }
-  if (traySource.mode === 'node' && nodeMeta.has(traySource.pinned)) {
-    expandedUuid = traySource.pinned;
-  }
   renderHeader();
   lastDraw = 0;
   renderNodes();
   drawAggregate();
   drawMinis();
+  if (expandedUuid) fetchPing(expandedUuid);
 }
-
-document.getElementById('btn-panel').addEventListener('click', async () => {
-  await invoke('open_panel_cmd').catch(() => {});
-  win.hide();
-});
-document.getElementById('btn-settings').addEventListener('click', async () => {
-  await invoke('open_settings_cmd').catch(() => {});
-  win.hide();
-});
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') win.hide(); });
 
 // 固定显示：失焦不自动收起，再次打开也保持拖动后的位置
 const pinBtn = document.getElementById('btn-pin');
@@ -624,15 +739,35 @@ async function restorePin() {
     renderPin();
   } catch (e) { /* default unpinned */ }
 }
+
+// 拉取节点的网络质量记录(延迟/丢包,1 小时),经 Rust 代理避免跨域
+async function fetchPing(uuid) {
+  try {
+    const recs = await invoke('get_ping_records', { uuid, hours: 1 });
+    pingSeries.set(uuid, (recs || []).filter((p) => isFinite(p.t)));
+    lastDraw = 0;
+    scheduleDraw();
+  } catch (e) { /* 网络失败保持现有内容 */ }
+}
+
+document.getElementById('btn-panel').addEventListener('click', async () => {
+  await invoke('open_panel_cmd').catch(() => {});
+  win.hide();
+});
+document.getElementById('btn-settings').addEventListener('click', async () => {
+  await invoke('open_settings_cmd').catch(() => {});
+  win.hide();
+});
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') win.hide(); });
 window.addEventListener('resize', () => { lastDraw = 0; scheduleDraw(); });
 
 (async () => {
   await listen('monitor://update', (e) => ingestSnap(e.payload));
-  // Re-read settings/history every time the popover is shown (focus gained),
-  // so changes made in the tray menu are reflected here (two-way sync).
+  // Re-read settings/history every time the popover is shown (focus gained).
   win.listen('tauri://focus', refresh);
   await restorePin();
   refresh();
+  setInterval(() => { if (expandedUuid) fetchPing(expandedUuid); }, 30000);
 })();
 </script>
 </body>

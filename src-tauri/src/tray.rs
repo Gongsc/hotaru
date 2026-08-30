@@ -108,6 +108,7 @@ static MENU_CACHE: Mutex<Option<MenuCache>> = const_mutex(None);
 impl MenuCache {
     fn build(app: &AppHandle) -> tauri::Result<Self> {
         let open_panel = MenuItem::with_id(app, "open-panel", "打开面板", true, None::<&str>)?;
+        let reload_panel = MenuItem::with_id(app, "reload-panel", "刷新面板", true, None::<&str>)?;
         let open_settings = MenuItem::with_id(app, "open-settings", "设置…", true, None::<&str>)?;
 
         let autostart = CheckMenuItem::with_id(
@@ -124,6 +125,7 @@ impl MenuCache {
 
         let menu = Menu::new(app)?;
         menu.append(&open_panel)?;
+        menu.append(&reload_panel)?;
         menu.append(&open_settings)?;
         menu.append(&autostart)?;
         menu.append(&sep_bottom)?;
@@ -145,6 +147,7 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     match id.as_str() {
         "quit" => app.exit(0),
         "open-panel" => crate::windows::open_panel(app),
+        "reload-panel" => crate::windows::recreate_panel(app),
         "open-settings" => crate::windows::open_settings(app),
         "autostart" => {
             let launcher = app.autolaunch();

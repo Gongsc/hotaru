@@ -45,6 +45,13 @@ pub fn run() {
             WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == "main" {
                     // Closing the panel hides it; the tray keeps running.
+                    // Bump the panel epoch so pending open-watchdogs don't
+                    // resurrect a window the user just closed.
+                    window
+                        .app_handle()
+                        .state::<AppState>()
+                        .panel_epoch
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     api.prevent_close();
                     let _ = window.hide();
                 } else if window.label() == "chart" {

@@ -63,6 +63,7 @@ pub struct AppState {
     pub panel_load_started_ms: std::sync::atomic::AtomicU64,
     pub panel_reload_ms: std::sync::atomic::AtomicU64,
     pub panel_recreate_streak: std::sync::atomic::AtomicU64,
+    pub panel_epoch: std::sync::atomic::AtomicU64,
     /// Aggregate network samples; lives only for the current process run.
     pub net_history: NetHistory,
 }
@@ -88,6 +89,7 @@ pub fn init(app: &AppHandle) -> AppState {
         panel_load_started_ms: std::sync::atomic::AtomicU64::new(0),
         panel_reload_ms: std::sync::atomic::AtomicU64::new(0),
         panel_recreate_streak: std::sync::atomic::AtomicU64::new(0),
+        panel_epoch: std::sync::atomic::AtomicU64::new(1),
         net_history: NetHistory::default(),
     }
 }

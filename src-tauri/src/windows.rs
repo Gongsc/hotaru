@@ -60,23 +60,28 @@ pub fn mark_panel_loaded(app: &AppHandle) {
 /// window can't stay invisible; if it loaded but hung, recreate at 20s.
 pub fn spawn_panel_watchdog(app: &AppHandle) {
     let handle = app.clone();
-    let before = handle
-        .state::<AppState>()
-        .panel_load_ms
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let st = handle.state::<AppState>();
+    let before = st.panel_load_ms.load(std::sync::atomic::Ordering::Relaxed);
+    // 面板世代计数:用户在此看门狗存活期间关闭/重新打开面板,即视为过期
+    let epoch = st.panel_epoch.load(std::sync::atomic::Ordering::Relaxed);
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(6));
         let Some(window) = handle.get_webview_window("main") else { return };
+        let st = handle.state::<AppState>();
+        if st.panel_epoch.load(std::sync::atomic::Ordering::Relaxed) != epoch {
+            return; // 用户已关闭/重新打开面板,该看门狗作废
+        }
         if !window.is_visible().unwrap_or(true) {
             let _ = window.show();
             let _ = window.set_focus();
         }
         std::thread::sleep(PANEL_LOAD_TIMEOUT - std::time::Duration::from_secs(6));
         let Some(window) = handle.get_webview_window("main") else { return };
-        let loaded = handle
-            .state::<AppState>()
-            .panel_load_ms
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let st = handle.state::<AppState>();
+        if st.panel_epoch.load(std::sync::atomic::Ordering::Relaxed) != epoch {
+            return;
+        }
+        let loaded = st.panel_load_ms.load(std::sync::atomic::Ordering::Relaxed);
         if loaded > before || !window.is_visible().unwrap_or(false) {
             return;
         }
@@ -132,7 +137,14 @@ pub fn spawn_panel_watchdog_loop(app: &AppHandle) {
 /// creating the window there silently produces a dead (white) webview.
 pub fn open_panel(app: &AppHandle) {
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || open_panel_on_main(&handle));
+    let _ = app.run_on_main_thread(move || {
+        // 新的打开动作 = 新的面板世代,使旧的打开看门狗全部作废
+        handle
+            .state::<AppState>()
+            .panel_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        open_panel_on_main(&handle);
+    });
 }
 
 fn open_panel_on_main(app: &AppHandle) {

@@ -253,11 +253,17 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
             window
         }
         None => {
-            let Ok(window) = WebviewWindowBuilder::new(app, "chart", WebviewUrl::App("chart.html".into()))
+            let builder = WebviewWindowBuilder::new(app, "chart", WebviewUrl::App("chart.html".into()))
                 .title("Hotaru")
                 .inner_size(cw, ch)
-                .decorations(false)
-                .transparent(true)
+                .decorations(false);
+            // Tauri exposes native window transparency conditionally. The
+            // chart page already provides its own translucent panel on
+            // Windows, while macOS needs native transparency for the rounded
+            // popover to render correctly.
+            #[cfg(target_os = "macos")]
+            let builder = builder.transparent(true);
+            let Ok(window) = builder
                 .always_on_top(true)
                 .skip_taskbar(true)
                 .resizable(false)

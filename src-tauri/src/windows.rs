@@ -1,8 +1,8 @@
 #[cfg(target_os = "macos")]
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    webview::PageLoadEvent, AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder,
 };
 
 use crate::models::{normalize_base, ThemeMode};
@@ -205,6 +205,14 @@ fn chart_logical_size(node_count: usize) -> (f64, f64) {
 /// Ignore tray clicks that arrive right after the popover auto-hid on blur,
 /// so the same click does not instantly reopen it (toggle semantics).
 const CHART_REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(700);
+/// Local settings pages normally load immediately. A longer delay on WebView2
+/// indicates a stuck renderer; retry without leaving a cached white window.
+const SETTINGS_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
+const SETTINGS_MAX_LOAD_RETRIES: u8 = 2;
+
+fn should_retry_settings_load(retry: u8) -> bool {
+    retry < SETTINGS_MAX_LOAD_RETRIES
+}
 
 fn native_theme(theme: ThemeMode) -> Option<tauri::Theme> {
     match theme {
@@ -262,6 +270,8 @@ pub fn mark_panel_loaded(app: &AppHandle) {
     let st = app.state::<AppState>();
     st.panel_load_ms
         .store(ms, std::sync::atomic::Ordering::Relaxed);
+    st.panel_recreate_streak
+        .store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Spawn a watchdog after panel creation: if the page hasn't shown itself
@@ -424,6 +434,16 @@ fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
         .theme(native_theme(theme))
         .decorations(false)
         .initialization_script(PANEL_CHROME_SCRIPT)
+        .on_page_load(|window, payload| match payload.event() {
+            PageLoadEvent::Started => {
+                window
+                    .app_handle()
+                    .state::<AppState>()
+                    .panel_load_started_ms
+                    .store(now_ms_u64(), std::sync::atomic::Ordering::Relaxed);
+            }
+            PageLoadEvent::Finished => mark_panel_loaded(window.app_handle()),
+        })
         .inner_size(1200.0, 800.0)
         .min_inner_size(780.0, 560.0)
         .build()?;
@@ -509,6 +529,10 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
                 .initialization_script(
                     "const setNativeVibrancy=()=>document.documentElement?.classList.add('native-vibrancy');if(document.documentElement){setNativeVibrancy()}else{document.addEventListener('DOMContentLoaded',setNativeVibrancy,{once:true})}",
                 );
+            #[cfg(target_os = "windows")]
+            let builder = builder.initialization_script(
+                "const setWindowsOpaque=()=>document.documentElement?.classList.add('windows-opaque');if(document.documentElement){setWindowsOpaque()}else{document.addEventListener('DOMContentLoaded',setWindowsOpaque,{once:true})}",
+            );
             let Ok(window) = builder
                 .always_on_top(true)
                 .skip_taskbar(true)
@@ -681,27 +705,78 @@ pub fn open_settings(app: &AppHandle) {
 fn open_settings_on_main(app: &AppHandle) {
     match app.get_webview_window("settings") {
         Some(window) => {
-            let _ = window.show();
-            let _ = window.unminimize();
-            let _ = window.set_focus();
+            if window.is_visible().unwrap_or(false) {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            } else {
+                // Invisible means the page has not reached load-finished yet.
+                // Treat another explicit open as a manual recovery attempt.
+                let _ = window.destroy();
+                let _ = create_settings_window(app, 0);
+            }
         }
         None => {
-            let theme = app.state::<AppState>().settings.read().theme;
-            let _ =
-                WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
-                    .title("Hotaru 设置")
-                    .theme(native_theme(theme))
-                    .inner_size(540.0, 760.0)
-                    .min_inner_size(480.0, 600.0)
-                    .build();
+            let _ = create_settings_window(app, 0);
         }
     }
+}
+
+fn create_settings_window(app: &AppHandle, retry: u8) -> tauri::Result<()> {
+    let theme = app.state::<AppState>().settings.read().theme;
+    let loaded = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let loaded_on_page = loaded.clone();
+    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+        .title("Hotaru 设置")
+        .theme(native_theme(theme))
+        .inner_size(540.0, 760.0)
+        .min_inner_size(480.0, 600.0)
+        // Avoid exposing WebView2's blank backing surface while the local page
+        // is still initializing. The load callback reveals the real content.
+        .visible(false)
+        .on_page_load(move |window, payload| {
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                loaded_on_page.store(true, std::sync::atomic::Ordering::Release);
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        })
+        .build()?;
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(SETTINGS_LOAD_TIMEOUT);
+        if loaded.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let inner = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            if loaded.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            let Some(window) = inner.get_webview_window("settings") else {
+                return;
+            };
+            if should_retry_settings_load(retry) {
+                let _ = window.destroy();
+                let _ = create_settings_window(&inner, retry + 1);
+            } else {
+                // Discard the permanently blank instance. A later explicit
+                // open starts a fresh retry sequence instead of reusing it.
+                let _ = window.destroy();
+            }
+        });
+    });
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod panel_chrome_tests {
     use super::*;
 
+    const CHART_HTML: &str = include_str!("../../ui/chart.html");
     /// 1080p monitor at the virtual-desktop origin: `(top, height)`.
     const SCREEN: Option<(f64, f64)> = Some((0.0, 1080.0));
 
@@ -771,5 +846,19 @@ mod panel_chrome_tests {
         assert!(PANEL_CHROME_SCRIPT.contains("prefers-color-scheme: dark"));
         assert!(PANEL_CHROME_SCRIPT.contains("padding-top: calc("));
         assert!(PANEL_CHROME_SCRIPT.contains("data-tauri-drag-region"));
+    }
+
+    #[test]
+    fn windows_chart_uses_an_opaque_theme_surface() {
+        assert!(CHART_HTML.contains(":root.windows-opaque"));
+        assert!(CHART_HTML.contains("html.windows-opaque body"));
+        assert!(CHART_HTML.contains("border-radius: 0"));
+    }
+
+    #[test]
+    fn settings_load_retries_are_bounded() {
+        assert!(should_retry_settings_load(0));
+        assert!(should_retry_settings_load(1));
+        assert!(!should_retry_settings_load(2));
     }
 }

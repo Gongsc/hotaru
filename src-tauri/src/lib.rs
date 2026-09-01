@@ -110,6 +110,7 @@ pub fn run() {
             commands::open_settings_cmd,
             commands::get_chart_pinned,
             commands::set_chart_pinned,
+            commands::resize_chart,
             commands::get_ping_records,
         ])
         .run(tauri::generate_context!())

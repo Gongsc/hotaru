@@ -202,6 +202,8 @@ pub struct PingPoint {
     pub t: u64,
     /// Latency in ms; negative means the probe was lost.
     pub v: f64,
+    /// Ping task identity, used to average the latest result per target.
+    pub task_id: u64,
 }
 
 /// Proxy the backend's ping-monitor records for one node, so the webview
@@ -229,18 +231,25 @@ pub async fn get_ping_records(
         return Err(format!("HTTP {}", resp.status()));
     }
     let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parse_ping_records(&body))
+}
+
+fn parse_ping_records(body: &serde_json::Value) -> Vec<PingPoint> {
     let mut out = Vec::new();
     if let Some(records) = body.pointer("/data/records").and_then(|v| v.as_array()) {
         for r in records {
-            let v = r.get("value").and_then(|x| x.as_f64()).unwrap_or(0.0);
+            let Some(v) = r.get("value").and_then(|x| x.as_f64()) else {
+                continue;
+            };
+            let task_id = r.get("task_id").and_then(|x| x.as_u64()).unwrap_or(0);
             let time = r.get("time").and_then(|x| x.as_str()).unwrap_or("");
             if let Some(t) = parse_rfc3339_ms(time) {
-                out.push(PingPoint { t, v });
+                out.push(PingPoint { t, v, task_id });
             }
         }
     }
     out.sort_by_key(|p| p.t);
-    Ok(out)
+    out
 }
 
 /// Minimal RFC3339 UTC parser ("2026-08-29T16:50:00Z", fractional seconds
@@ -308,5 +317,22 @@ mod tests {
             Some(1_709_164_800_000)
         );
         assert_eq!(parse_rfc3339_ms("not-a-date"), None);
+    }
+
+    #[test]
+    fn ping_records_preserve_task_identity_and_skip_invalid_values() {
+        let body = serde_json::json!({
+            "data": { "records": [
+                { "task_id": 7, "time": "2026-08-29T16:50:00Z", "value": 42.5 },
+                { "task_id": 9, "time": "2026-08-29T16:51:00Z", "value": 1 },
+                { "task_id": 7, "time": "2026-08-29T16:52:00Z" }
+            ] }
+        });
+        let points = parse_ping_records(&body);
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].task_id, 7);
+        assert_eq!(points[0].v, 42.5);
+        assert_eq!(points[1].task_id, 9);
+        assert_eq!(points[1].v, 1.0);
     }
 }

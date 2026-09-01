@@ -139,22 +139,8 @@ pub fn parse_ws_text(txt: &str, nodes: &HashMap<String, ClientInfo>) -> Option<M
         .map(|info| {
             let online = payload.online.iter().any(|o| o == &info.uuid);
             match payload.data.get(&info.uuid) {
-                Some(rep) => report_to_snapshot(
-                    &info.uuid,
-                    &info.name,
-                    &info.region,
-                    &info.os,
-                    online,
-                    rep,
-                ),
-                None => report_to_snapshot(
-                    &info.uuid,
-                    &info.name,
-                    &info.region,
-                    &info.os,
-                    false,
-                    &Report::default(),
-                ),
+                Some(rep) => report_to_snapshot(info, online, rep),
+                None => report_to_snapshot(info, false, &Report::default()),
             }
         })
         .collect();
@@ -203,13 +189,13 @@ async fn http_loop(
                         Ok(resp) if resp.status().is_success() => match resp.json::<Envelope<Vec<Report>>>().await {
                             Ok(env) => match env.data {
                                 Some(reports) if !reports.is_empty() => {
-                                    report_to_snapshot(uuid, &info.name, &info.region, &info.os, true, reports.last().unwrap())
+                                    report_to_snapshot(info, true, reports.last().unwrap())
                                 }
-                                _ => offline_snapshot(uuid, info),
+                                _ => offline_snapshot(info),
                             },
-                            Err(_) => offline_snapshot(uuid, info),
+                            Err(_) => offline_snapshot(info),
                         },
-                        _ => offline_snapshot(uuid, info),
+                        _ => offline_snapshot(info),
                     };
                     out.push(snapshot);
                 }
@@ -224,8 +210,8 @@ async fn http_loop(
     }
 }
 
-fn offline_snapshot(uuid: &str, info: &ClientInfo) -> NodeSnapshot {
-    report_to_snapshot(uuid, &info.name, &info.region, &info.os, false, &Report::default())
+fn offline_snapshot(info: &ClientInfo) -> NodeSnapshot {
+    report_to_snapshot(info, false, &Report::default())
 }
 
 // ---------------------------------------------------------------------------

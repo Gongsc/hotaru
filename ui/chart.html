@@ -16,7 +16,11 @@
     --down: #34d399;
     --warn: #f87171;
     --amber: #fbbf24;
+    --traffic: #a78bfa;
     --off: #9d9da1;
+    --tooltip: rgba(239, 239, 242, .96);
+    --tooltip-ink: #1d1d1f;
+    --tooltip-border: rgba(0, 0, 0, .12);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -46,6 +50,14 @@
     border-radius: 13px;
     overflow: hidden;
     display: flex; flex-direction: column;
+  }
+  /* macOS uses a native NSVisualEffectView Popover material. Avoid stacking
+     WebKit's backdrop filter on top: it can be dropped for a frame when the
+     tray click transfers focus to the webview. */
+  html.native-vibrancy #panel {
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
   .ph { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 4px; cursor: move; user-select: none; -webkit-user-select: none; }
   .ph .left { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -86,8 +98,10 @@
   .card { margin-bottom: 2px; }
   .nbody { display: none; padding: 2px 8px 8px; }
   .card.open > .nbody { display: block; }
-  .meta-line { display: flex; gap: 12px; font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; padding: 2px 0 3px; }
-  .meta-line b { color: var(--ink); font-weight: 600; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; padding: 2px 0 3px;
+               font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .meta-grid span { display: flex; justify-content: space-between; gap: 5px; min-width: 0; }
+  .meta-grid b { color: var(--ink); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .nbody .rates { font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; padding: 2px 0 3px; }
   canvas.mini { display: block; width: 100%; height: 54px; }
   .bar-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-2); margin-top: 6px; }
@@ -95,6 +109,8 @@
   .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
   .bar i { display: block; height: 100%; border-radius: 3px; background: var(--up); transition: width .4s; }
   .bar.mem i { background: var(--down); }
+  .bar.disk i { background: var(--amber); }
+  .bar.traffic i { background: var(--traffic); }
   .bar.hot i { background: var(--warn); }
   .bar-row .pv { width: 38px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -102,10 +118,40 @@
   .stat-row { display: flex; align-items: center; gap: 7px; }
   .stat-lbl { flex: none; width: 30px; font-size: 10.5px; color: var(--ink-2); }
   .cells { flex: 1; display: flex; gap: 3px; }
-  .cells i { flex: 1; height: 13px; border-radius: 2.5px; background: var(--chip); }
+  .cells i { position: relative; flex: 1; height: 13px; border-radius: 2.5px; background: var(--chip);
+             outline: 1.5px solid transparent; outline-offset: 1px; cursor: crosshair;
+             transition: filter .08s ease, outline-color .08s ease; }
   .cells i.g { background: var(--down); }
   .cells i.a { background: var(--amber); }
   .cells i.r { background: var(--warn); }
+  .cells i:hover { outline-color: var(--ink); filter: brightness(1.08); z-index: 1; }
+
+  .cell-tooltip {
+    position: fixed; left: 0; top: 0; z-index: 100; min-width: 62px; padding: 4px 7px;
+    border: .5px solid var(--tooltip-border); border-radius: 6px;
+    background: var(--tooltip); color: var(--tooltip-ink);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, .22);
+    font-size: 11px; line-height: 1.25; text-align: center; white-space: nowrap;
+    font-variant-numeric: tabular-nums; pointer-events: none;
+    opacity: 0; visibility: hidden;
+    transform: translate(-50%, calc(-100% - 6px)) scale(.96);
+    transform-origin: center bottom;
+    transition: opacity .08s ease, transform .08s ease, visibility 0s linear .08s;
+  }
+  .cell-tooltip::after {
+    content: ""; position: absolute; left: 50%; bottom: -4px; width: 7px; height: 7px;
+    background: var(--tooltip); border-right: .5px solid var(--tooltip-border);
+    border-bottom: .5px solid var(--tooltip-border); transform: translateX(-50%) rotate(45deg);
+  }
+  .cell-tooltip.show { opacity: 1; visibility: visible;
+                       transform: translate(-50%, calc(-100% - 6px)) scale(1);
+                       transition-delay: 0s; }
+  .cell-tooltip.below { transform: translate(-50%, 6px) scale(.96); transform-origin: center top; }
+  .cell-tooltip.below.show { transform: translate(-50%, 6px) scale(1); }
+  .cell-tooltip.below::after { top: -4px; bottom: auto; border: 0;
+                               border-left: .5px solid var(--tooltip-border);
+                               border-top: .5px solid var(--tooltip-border); }
+  .cell-tooltip .tip-value { margin-top: 1px; font-weight: 600; }
 
   .pf { display: flex; gap: 8px; padding: 8px 12px 12px; flex: none; }
   .pf button {
@@ -143,6 +189,9 @@
     <button id="btn-settings">设置…</button>
   </div>
 </div>
+<div class="cell-tooltip" id="cell-tooltip" role="tooltip" aria-hidden="true">
+  <div class="tip-time"></div><div class="tip-value"></div>
+</div>
 
 <script>
 const { invoke } = window.__TAURI__.core;
@@ -154,6 +203,9 @@ const RANGE_LABELS = { 300: '5 分钟', 900: '15 分钟', 3600: '1 小时', 2160
 const FRONT_BUFFER_MS = 6 * 3600 * 1000;
 const MIN_POPOVER_H = 300, MAX_POPOVER_H = 900;
 const GRID_BUCKETS = 12, GRID_BUCKET_MS = 5 * 60 * 1000; // 12 × 5min = 1h
+const CELL_TIME_FORMAT = new Intl.DateTimeFormat('zh-CN', {
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+});
 
 let rangeSecs = 900;
 let cpuWarnPct = 80, memWarnPct = 85;
@@ -165,6 +217,43 @@ let lastDraw = 0;
 let backendOk = true;
 let onlineCount = null;
 let totalUp = 0, totalDown = 0;
+
+const cellTooltip = document.getElementById('cell-tooltip');
+const tipTime = cellTooltip.querySelector('.tip-time');
+const tipValue = cellTooltip.querySelector('.tip-value');
+
+function showCellTooltip(cell) {
+  if (!cell?.dataset.tipTime) return;
+  tipTime.textContent = cell.dataset.tipTime;
+  tipValue.textContent = cell.dataset.tipValue || '无数据';
+  cellTooltip.classList.remove('below');
+  cellTooltip.classList.add('show');
+  cellTooltip.setAttribute('aria-hidden', 'false');
+
+  const cellRect = cell.getBoundingClientRect();
+  const half = cellTooltip.offsetWidth / 2;
+  const left = Math.max(half + 4, Math.min(window.innerWidth - half - 4,
+    cellRect.left + cellRect.width / 2));
+  const below = cellRect.top - cellTooltip.offsetHeight - 8 < 4;
+  cellTooltip.classList.toggle('below', below);
+  cellTooltip.style.left = left + 'px';
+  cellTooltip.style.top = (below ? cellRect.bottom : cellRect.top) + 'px';
+}
+
+function hideCellTooltip() {
+  cellTooltip.classList.remove('show', 'below');
+  cellTooltip.setAttribute('aria-hidden', 'true');
+}
+
+document.addEventListener('pointerover', (event) => {
+  const cell = event.target.closest?.('.cells i');
+  if (cell) showCellTooltip(cell);
+});
+document.addEventListener('pointerout', (event) => {
+  const cell = event.target.closest?.('.cells i');
+  if (cell && !cell.contains(event.relatedTarget)) hideCellTooltip();
+});
+window.addEventListener('blur', hideCellTooltip);
 
 function fmtRate(bps) {
   if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
@@ -186,6 +275,27 @@ function fmtUptime(s) {
   if (d > 0) return d + '天' + h + '小时';
   if (h > 0) return h + '小时' + m + '分钟';
   return m + '分钟';
+}
+
+function fmtRemaining(expiredAt) {
+  if (!expiredAt) return '长期';
+  const expires = Date.parse(expiredAt);
+  if (!Number.isFinite(expires)) return '—';
+  const days = Math.ceil((expires - Date.now()) / 86400000);
+  if (days <= 0) return '已到期';
+  if (days >= 365) return Math.floor(days / 365) + '年' + (days % 365) + '天';
+  if (days >= 30) return Math.floor(days / 30) + '个月' + (days % 30) + '天';
+  return days + '天';
+}
+
+function trafficUsed(meta) {
+  switch ((meta.trafficLimitType || 'max').toLowerCase()) {
+    case 'sum': return meta.totalUp + meta.totalDown;
+    case 'min': return Math.min(meta.totalUp, meta.totalDown);
+    case 'up': return meta.totalUp;
+    case 'down': return meta.totalDown;
+    default: return Math.max(meta.totalUp, meta.totalDown);
+  }
 }
 
 function fmtAgo(ms) {
@@ -442,13 +552,8 @@ function syncNodes() {
   }
 }
 
-function renderNodes() {
-  nodesKey = nodesKeyOf();
-  buildNodes();
-  patchNodes();
-}
-
 function buildNodes() {
+  hideCellTooltip();
   const container = document.getElementById('nodes');
   container.innerHTML = '';
 
@@ -504,11 +609,16 @@ function buildNodes() {
     const body = document.createElement('div');
     body.className = 'nbody';
     body.innerHTML =
-      '<div class="meta-line"><span>在线时长 <b class="up-t">—</b></span></div>' +
+      '<div class="meta-grid">' +
+      '  <span>运行 <b class="up-t">—</b></span><span>剩余 <b class="expire-t">—</b></span>' +
+      '  <span>累计上传 <b class="total-up">—</b></span><span>累计下载 <b class="total-down">—</b></span>' +
+      '</div>' +
       '<div class="rates">—</div>' +
       '<canvas class="mini"></canvas>' +
       '<div class="bar-row"><span class="lbl">CPU</span><div class="bar cpu"><i></i></div><span class="pv">—</span></div>' +
       '<div class="bar-row"><span class="lbl">内存</span><div class="bar mem"><i></i></div><span class="pv">—</span></div>' +
+      '<div class="bar-row"><span class="lbl">硬盘</span><div class="bar disk"><i></i></div><span class="pv disk-pv">—</span></div>' +
+      '<div class="bar-row"><span class="lbl traffic-lbl">流量</span><div class="bar traffic"><i></i></div><span class="pv traffic-pv">—</span></div>' +
       '<div class="stat">' +
       '  <div class="stat-row"><span class="stat-lbl">延迟</span><div class="cells row-lat"></div><span class="pv lat-now">—</span></div>' +
       '  <div class="stat-row"><span class="stat-lbl">丢包</span><div class="cells row-loss"></div><span class="pv loss-now">—</span></div>' +
@@ -523,12 +633,20 @@ function buildNodes() {
     card._refs = {
       row,
       upt: body.querySelector('.up-t'),
+      expire: body.querySelector('.expire-t'),
+      totalUp: body.querySelector('.total-up'),
+      totalDown: body.querySelector('.total-down'),
       rates: body.querySelector('.rates'),
       canvas: body.querySelector('canvas.mini'),
       cpuBar: body.querySelector('.bar.cpu'),
-      cpuPv: body.querySelectorAll('.pv')[0],
+      cpuPv: body.querySelector('.bar.cpu + .pv'),
       memBar: body.querySelector('.bar.mem'),
-      memPv: body.querySelectorAll('.pv')[1],
+      memPv: body.querySelector('.bar.mem + .pv'),
+      diskBar: body.querySelector('.bar.disk'),
+      diskPv: body.querySelector('.disk-pv'),
+      trafficBar: body.querySelector('.bar.traffic'),
+      trafficPv: body.querySelector('.traffic-pv'),
+      trafficLbl: body.querySelector('.traffic-lbl'),
       latNow: body.querySelector('.lat-now'),
       lossNow: body.querySelector('.loss-now'),
       rowLat: body.querySelector('.row-lat'),
@@ -540,7 +658,19 @@ function buildNodes() {
 
 // 网络质量:后端 /api/records/ping(每 5 分钟一格,共 1 小时)。
 // 延迟行:绿 <100ms / 黄 <200ms / 红 ≥200ms;丢包行:绿 0% / 黄 ≤5% / 红 >5%。
-const pingSeries = new Map(); // uuid -> [{t, v}] v = 延迟 ms,负值表示该次探测丢包
+const pingSeries = new Map(); // uuid -> [{t, v, task_id}] v = 延迟 ms,负值表示该次探测丢包
+
+function latestTaskAverage(recs) {
+  const latestByTask = new Map();
+  for (const p of recs) {
+    const taskId = p.task_id ?? 0;
+    const previous = latestByTask.get(taskId);
+    if (!previous || p.t >= previous.t) latestByTask.set(taskId, p);
+  }
+  const valid = [...latestByTask.values()].filter((p) => Number.isFinite(p.v) && p.v >= 0);
+  if (!valid.length) return null;
+  return valid.reduce((sum, p) => sum + p.v, 0) / valid.length;
+}
 
 function renderPingGrid(uuid, refs) {
   const now = Date.now();
@@ -550,23 +680,40 @@ function renderPingGrid(uuid, refs) {
   const lossCnt = new Array(GRID_BUCKETS).fill(0);
   const latSum = new Array(GRID_BUCKETS).fill(0);
   const latCnt = new Array(GRID_BUCKETS).fill(0);
+  const latestAt = new Array(GRID_BUCKETS).fill(0);
   for (const p of recs) {
     const b = Math.min(GRID_BUCKETS - 1, Math.max(0, Math.floor((p.t - start) / GRID_BUCKET_MS)));
     cnt[b]++;
+    latestAt[b] = Math.max(latestAt[b], p.t);
     if (p.v >= 0) { latSum[b] += p.v; latCnt[b]++; } else { lossCnt[b]++; }
   }
   for (let b = 0; b < GRID_BUCKETS; b++) {
     const lat = refs.rowLat.children[b], loss = refs.rowLoss.children[b];
-    if (!cnt[b]) { lat.className = ''; loss.className = ''; continue; }
+    const bucketTime = latestAt[b] || start + (b + .5) * GRID_BUCKET_MS;
+    const time = CELL_TIME_FORMAT.format(new Date(bucketTime));
+    lat.dataset.tipTime = loss.dataset.tipTime = time;
+    if (!cnt[b]) {
+      lat.className = '';
+      loss.className = '';
+      lat.dataset.tipValue = loss.dataset.tipValue = '无数据';
+      lat.setAttribute('aria-label', time + '，延迟无数据');
+      loss.setAttribute('aria-label', time + '，丢包无数据');
+      continue;
+    }
     const avg = latSum[b] / latCnt[b];
     lat.className = !latCnt[b] ? 'r' : avg < 100 ? 'g' : avg < 200 ? 'a' : 'r';
     const ratio = lossCnt[b] / cnt[b];
     loss.className = ratio === 0 ? 'g' : ratio <= 0.05 ? 'a' : 'r';
+    lat.dataset.tipValue = latCnt[b] ? Math.round(avg) + ' ms' : '无响应';
+    loss.dataset.tipValue = (ratio * 100).toFixed(1) + '%';
+    lat.setAttribute('aria-label', time + '，延迟' + lat.dataset.tipValue);
+    loss.setAttribute('aria-label', time + '，丢包' + loss.dataset.tipValue);
   }
-  // 汇总数值:延迟取最近一次成功探测;丢包取整小时比例
-  let lastLat = null, neg = 0;
-  for (const p of recs) { if (p.v >= 0) lastLat = p.v; else neg++; }
-  refs.latNow.textContent = lastLat == null ? '—' : Math.round(lastLat) + 'ms';
+  // 汇总数值:延迟取每个任务的最新结果后求平均;丢包取整小时比例。
+  const averageLat = latestTaskAverage(recs);
+  let neg = 0;
+  for (const p of recs) { if (p.v < 0) neg++; }
+  refs.latNow.textContent = averageLat == null ? '—' : Math.round(averageLat) + 'ms';
   refs.lossNow.textContent = recs.length ? (neg / recs.length * 100).toFixed(1) + '%' : '—';
 }
 
@@ -584,6 +731,9 @@ function patchNodes() {
       if (!r) return;
       r.row.querySelector('.dot').className = 'dot' + (meta.online ? '' : ' off');
       r.upt.textContent = meta.online ? fmtUptime(meta.uptime) : '—';
+      r.expire.textContent = fmtRemaining(meta.expiredAt);
+      r.totalUp.textContent = fmtBytes(meta.totalUp);
+      r.totalDown.textContent = fmtBytes(meta.totalDown);
       if (meta.online) {
         const s = nodeSeries.get(uuid);
         const last = s && s[s.length - 1];
@@ -594,6 +744,17 @@ function patchNodes() {
         r.cpuBar.className = 'bar cpu' + (meta.cpu >= cpuWarnPct ? ' hot' : '');
         r.memBar.querySelector('i').style.width = Math.min(100, Math.max(0, meta.memPct)) + '%';
         r.memBar.className = 'bar mem' + (meta.memPct >= memWarnPct ? ' hot' : '');
+        r.diskPv.textContent = meta.diskTotal > 0 ? meta.diskPct.toFixed(0) + '%' : '—';
+        r.diskPv.title = meta.diskTotal > 0 ? fmtBytes(meta.diskUsed) + ' / ' + fmtBytes(meta.diskTotal) : '';
+        r.diskBar.querySelector('i').style.width = Math.min(100, Math.max(0, meta.diskPct)) + '%';
+        r.diskBar.className = 'bar disk' + (meta.diskPct >= 90 ? ' hot' : '');
+        const usedTraffic = trafficUsed(meta);
+        const trafficPct = meta.trafficLimit > 0 ? usedTraffic / meta.trafficLimit * 100 : 0;
+        r.trafficPv.textContent = meta.trafficLimit > 0 ? trafficPct.toFixed(0) + '%' : '—';
+        r.trafficPv.title = meta.trafficLimit > 0 ? fmtBytes(usedTraffic) + ' / ' + fmtBytes(meta.trafficLimit) : '未设置流量额度';
+        r.trafficLbl.title = '计费方式：' + (meta.trafficLimitType || 'max');
+        r.trafficBar.querySelector('i').style.width = Math.min(100, Math.max(0, trafficPct)) + '%';
+        r.trafficBar.className = 'bar traffic' + (trafficPct >= 90 ? ' hot' : '');
       } else {
         r.rates.textContent = '离线';
         r.cpuPv.textContent = '—';
@@ -602,6 +763,12 @@ function patchNodes() {
         r.cpuBar.className = 'bar cpu';
         r.memBar.querySelector('i').style.width = '0%';
         r.memBar.className = 'bar mem';
+        r.diskPv.textContent = '—';
+        r.diskBar.querySelector('i').style.width = '0%';
+        r.diskBar.className = 'bar disk';
+        r.trafficPv.textContent = '—';
+        r.trafficBar.querySelector('i').style.width = '0%';
+        r.trafficBar.className = 'bar traffic';
       }
       if (card.classList.contains('open')) renderPingGrid(uuid, r);
     } catch (e) { console.error('patch card failed', e); }
@@ -630,7 +797,10 @@ async function fitHeight() {
     if (m && m.size && m.size.height) maxH = m.size.height - 80;
   } catch (e) { /* keep default cap */ }
   const finalH = Math.round(Math.min(Math.max(needed, MIN_POPOVER_H), Math.max(MIN_POPOVER_H, maxH)));
-  document.body.style.height = finalH + 'px';
+  // The native resize can settle at a slightly different viewport height on
+  // macOS. Stretch to that real viewport instead of leaving a white strip
+  // below the rounded panel.
+  document.body.style.height = '100%';
   panel.style.height = '100%';
   if (window.__chartH === finalH) return;
   window.__chartH = finalH;
@@ -663,6 +833,14 @@ function ingestSnap(snap) {
         online: !!n.online,
         cpu: n.cpu_usage,
         memPct: n.ram_total > 0 ? (n.ram_used / n.ram_total) * 100 : 0,
+        diskUsed: n.disk_used || 0,
+        diskTotal: n.disk_total || 0,
+        diskPct: n.disk_total > 0 ? (n.disk_used / n.disk_total) * 100 : 0,
+        totalUp: n.total_up || 0,
+        totalDown: n.total_down || 0,
+        trafficLimit: n.traffic_limit || 0,
+        trafficLimitType: n.traffic_limit_type || 'max',
+        expiredAt: n.expired_at || null,
         uptime: n.uptime_secs,
         region: n.region || '',
         os: n.os || '',
@@ -697,20 +875,23 @@ async function refresh() {
     cpuWarnPct = s.cpu_warn_pct || 80;
     memWarnPct = s.mem_warn_pct || 85;
   } catch (e) { /* keep current values */ }
+  // Synchronize from the Rust process's in-memory snapshot. This is local IPC,
+  // not a new backend request, and preserves the existing DOM when node IDs
+  // have not changed.
+  try {
+    const snap = await invoke('get_snapshot');
+    ingestSnap(snap);
+  } catch (e) { /* keep the last live snapshot */ }
   try {
     const payload = await invoke('get_net_history', { rangeSecs: 21600 });
     points = payload.aggregate || [];
     nodeSeries = new Map(Object.entries(payload.nodes || {}));
-  } catch (e) {
-    points = [];
-    nodeSeries = new Map();
-  }
+  } catch (e) { /* keep the cached history */ }
   renderHeader();
   lastDraw = 0;
-  renderNodes();
+  syncNodes();
   drawAggregate();
   drawMinis();
-  if (expandedUuid) fetchPing(expandedUuid);
 }
 
 // 固定显示：失焦不自动收起，再次打开也保持拖动后的位置
@@ -763,7 +944,7 @@ window.addEventListener('resize', () => { lastDraw = 0; scheduleDraw(); });
 
 (async () => {
   await listen('monitor://update', (e) => ingestSnap(e.payload));
-  // Re-read settings/history every time the popover is shown (focus gained).
+  // Refresh from process memory on focus; the page and node DOM stay alive.
   win.listen('tauri://focus', refresh);
   await restorePin();
   refresh();

@@ -55,8 +55,7 @@ pub fn run() {
                     api.prevent_close();
                     let _ = window.hide();
                 } else if window.label() == "chart" {
-                    // The popover has no decorations; always destroy it so a
-                    // wedged webview can never linger.
+                    // Preserve the popover webview and its cached node state.
                     api.prevent_close();
                     crate::windows::close_chart(window);
                 }

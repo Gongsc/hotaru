@@ -91,6 +91,12 @@ pub struct NodeSnapshot {
     pub net_down: f64,
     pub total_up: u64,
     pub total_down: u64,
+    #[serde(default)]
+    pub traffic_limit: u64,
+    #[serde(default)]
+    pub traffic_limit_type: String,
+    #[serde(default)]
+    pub expired_at: Option<String>,
     pub tcp: u64,
     pub udp: u64,
     pub uptime_secs: u64,
@@ -393,6 +399,12 @@ pub struct ClientInfo {
     pub mem_total: u64,
     #[serde(default, alias = "osAlias", alias = "osName")]
     pub os: String,
+    #[serde(default, alias = "trafficLimit")]
+    pub traffic_limit: u64,
+    #[serde(default, alias = "trafficLimitType")]
+    pub traffic_limit_type: String,
+    #[serde(default, alias = "expiredAt")]
+    pub expired_at: Option<String>,
 }
 
 impl Default for ClientInfo {
@@ -403,6 +415,9 @@ impl Default for ClientInfo {
             region: String::new(),
             mem_total: 0,
             os: String::new(),
+            traffic_limit: 0,
+            traffic_limit_type: String::new(),
+            expired_at: None,
         }
     }
 }
@@ -461,17 +476,17 @@ pub struct Conns {
     pub udp: Option<u64>,
 }
 
-pub fn report_to_snapshot(uuid: &str, name: &str, region: &str, os: &str, online: bool, r: &Report) -> NodeSnapshot {
+pub fn report_to_snapshot(info: &ClientInfo, online: bool, r: &Report) -> NodeSnapshot {
     NodeSnapshot {
-        uuid: uuid.to_string(),
-        name: if name.is_empty() {
-            format!("节点 {}", &uuid[..uuid.len().min(8)])
+        uuid: info.uuid.clone(),
+        name: if info.name.is_empty() {
+            format!("节点 {}", &info.uuid[..info.uuid.len().min(8)])
         } else {
-            name.to_string()
+            info.name.clone()
         },
         online,
-        region: region.to_string(),
-        os: os.to_string(),
+        region: info.region.clone(),
+        os: info.os.clone(),
         cpu_usage: r.cpu.as_ref().and_then(|c| c.usage).unwrap_or(0.0),
         ram_used: r.ram.as_ref().and_then(|m| m.used).unwrap_or(0),
         ram_total: r.ram.as_ref().and_then(|m| m.total).unwrap_or(0),
@@ -483,6 +498,9 @@ pub fn report_to_snapshot(uuid: &str, name: &str, region: &str, os: &str, online
         net_down: r.network.as_ref().and_then(|n| n.down).unwrap_or(0.0),
         total_up: r.network.as_ref().and_then(|n| n.total_up).unwrap_or(0),
         total_down: r.network.as_ref().and_then(|n| n.total_down).unwrap_or(0),
+        traffic_limit: info.traffic_limit,
+        traffic_limit_type: info.traffic_limit_type.clone(),
+        expired_at: info.expired_at.clone(),
         tcp: r.connections.as_ref().and_then(|c| c.tcp).unwrap_or(0),
         udp: r.connections.as_ref().and_then(|c| c.udp).unwrap_or(0),
         uptime_secs: r.uptime.unwrap_or(0),
@@ -556,24 +574,48 @@ mod tests {
 
     #[test]
     fn parse_ws_payload() {
-        let mut names = std::collections::HashMap::new();
-        names.insert("uuid-1".to_string(), "node-1".to_string());
         let env: Envelope<WsPayload> = serde_json::from_str(&sample_ws_json()).unwrap();
         let payload = env.data.unwrap();
         assert_eq!(payload.online, vec!["uuid-1".to_string()]);
         assert_eq!(payload.data.len(), 2);
         let rep = payload.data.get("uuid-1").unwrap();
-        let snap = report_to_snapshot("uuid-1", names.get("uuid-1").unwrap(), "", "", true, rep);
+        let info = ClientInfo {
+            uuid: "uuid-1".into(),
+            name: "node-1".into(),
+            traffic_limit: 1_000_000,
+            traffic_limit_type: "sum".into(),
+            expired_at: Some("2027-01-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        let snap = report_to_snapshot(&info, true, rep);
         assert_eq!(snap.name, "node-1");
         assert!((snap.cpu_usage - 42.5).abs() < 1e-9);
         assert_eq!(snap.ram_used, 4294967296);
         assert!((snap.net_down - 3567155.2).abs() < 1e-9);
         assert_eq!(snap.tcp, 120);
+        assert_eq!(snap.traffic_limit, 1_000_000);
+        assert_eq!(snap.traffic_limit_type, "sum");
+        assert_eq!(snap.expired_at.as_deref(), Some("2027-01-01T00:00:00Z"));
         // unknown node gets a fallback name
         let rep2 = payload.data.get("uuid-2").unwrap();
-        let snap2 = report_to_snapshot("uuid-2", "", "", "", false, rep2);
+        let info2 = ClientInfo { uuid: "uuid-2".into(), ..Default::default() };
+        let snap2 = report_to_snapshot(&info2, false, rep2);
         assert_eq!(snap2.name, "节点 uuid-2");
         assert_eq!(snap2.uptime_secs, 0);
+    }
+
+    #[test]
+    fn client_info_parses_billing_metadata() {
+        let info: ClientInfo = serde_json::from_str(r#"{
+          "uuid":"node-1",
+          "name":"Tokyo",
+          "traffic_limit":1099511627776,
+          "traffic_limit_type":"sum",
+          "expired_at":"2027-06-30T00:00:00Z"
+        }"#).unwrap();
+        assert_eq!(info.traffic_limit, 1_099_511_627_776);
+        assert_eq!(info.traffic_limit_type, "sum");
+        assert_eq!(info.expired_at.as_deref(), Some("2027-06-30T00:00:00Z"));
     }
 
     #[test]
@@ -587,7 +629,12 @@ mod tests {
             .iter()
             .map(|(uuid, rep)| {
                 let online = payload.online.iter().any(|o| o == uuid);
-                report_to_snapshot(uuid, names.get(uuid).map(|s| s.as_str()).unwrap_or(""), "", "", online, rep)
+                let info = ClientInfo {
+                    uuid: uuid.clone(),
+                    name: names.get(uuid).cloned().unwrap_or_default(),
+                    ..Default::default()
+                };
+                report_to_snapshot(&info, online, rep)
             })
             .collect();
         let agg = aggregate(&nodes.iter().collect::<Vec<_>>());
@@ -716,6 +763,9 @@ mod tests {
                 net_down: 0.0,
                 total_up: 0,
                 total_down: 0,
+                traffic_limit: 0,
+                traffic_limit_type: String::new(),
+                expired_at: None,
                 tcp: 0,
                 udp: 0,
                 uptime_secs: 0,

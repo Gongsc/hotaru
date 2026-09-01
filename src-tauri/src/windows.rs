@@ -1,4 +1,6 @@
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+#[cfg(target_os = "macos")]
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 
 use crate::models::normalize_base;
 use crate::state::AppState;
@@ -209,9 +211,9 @@ fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
 
 /// Open (or toggle) the chart popover anchored to the tray icon. The icon
 /// rect comes from the tray click event, in physical pixels. A pinned
-/// popover keeps its dragged position instead of re-anchoring. Closing
-/// DESTROYS the window so a wedged webview can never linger: every open
-/// starts with a fresh one.
+/// popover keeps its dragged position instead of re-anchoring. The window is
+/// hidden rather than reloaded so its node data and expansion state survive
+/// repeated opens.
 pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
     let (ix, iy, iw, ih) = icon_rect;
     let center_x = ix + iw / 2.0;
@@ -237,26 +239,52 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
     let window = match app.get_webview_window("chart") {
         Some(window) => {
             if window.is_visible().unwrap_or(false) {
-                // Toggle-close: hide is a native op and always works, even
-                // with a wedged webview. Reopening reloads the page, which
-                // self-heals it — no destroy/create race involved.
+                // Toggle-close without destroying the webview; reopening can
+                // reuse the current node data and UI state.
                 let _ = window.hide();
                 return;
             }
             if !pinned {
-                position_chart(app, &window, center_x, iy, iy + ih, ch);
+                // The retained page may be taller because a node is expanded.
+                // Anchor using its real size instead of the initial estimate.
+                let current_h = window
+                    .inner_size()
+                    .ok()
+                    .and_then(|size| {
+                        window
+                            .scale_factor()
+                            .ok()
+                            .map(|scale| size.height as f64 / scale)
+                    })
+                    .unwrap_or(ch);
+                position_chart(app, &window, center_x, iy, iy + ih, current_h);
             }
-            // Reopen after hide: reload the local page so a hung webview
-            // recovers instead of showing a frozen popover.
-            let _ = window.eval("location.reload()");
-            let _ = window.set_size(tauri::LogicalSize::new(cw, ch));
             window
         }
         None => {
-            let Ok(window) = WebviewWindowBuilder::new(app, "chart", WebviewUrl::App("chart.html".into()))
+            let builder = WebviewWindowBuilder::new(app, "chart", WebviewUrl::App("chart.html".into()))
                 .title("Hotaru")
                 .inner_size(cw, ch)
-                .decorations(false)
+                .decorations(false);
+            // WKWebView otherwise paints an opaque white surface behind the
+            // HTML panel, which leaks through its rounded corners on macOS.
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .transparent(true)
+                .effects(
+                    EffectsBuilder::new()
+                        .effect(Effect::Popover)
+                        // Focus briefly flickers while the tray click is
+                        // handed to the webview. Keep the material active so
+                        // AppKit does not drop and restore the blur.
+                        .state(EffectState::Active)
+                        .radius(13.0)
+                        .build(),
+                )
+                .initialization_script(
+                    "const setNativeVibrancy=()=>document.documentElement?.classList.add('native-vibrancy');if(document.documentElement){setNativeVibrancy()}else{document.addEventListener('DOMContentLoaded',setNativeVibrancy,{once:true})}",
+                );
+            let Ok(window) = builder
                 .always_on_top(true)
                 .skip_taskbar(true)
                 .resizable(false)
@@ -276,8 +304,7 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
 }
 
 /// Close the chart popover from the Rust side (blur timeout / close
-/// request). Hide is a native operation and always works; the popover page
-/// reloads itself on the next open.
+/// request). Hiding keeps the page and its cached node state alive.
 pub fn close_chart(window: &tauri::Window) {
     let _ = window.hide();
 }

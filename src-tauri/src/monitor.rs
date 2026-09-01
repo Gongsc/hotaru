@@ -36,9 +36,21 @@ async fn engine(app: AppHandle) {
             continue;
         }
         let client = build_client(&settings);
-        match ws_session(&app, &client, &settings, &mut rx).await {
-            Ok(()) => continue, // settings changed -> reconnect with new config
-            Err(e) => set_error(&app, &format!("实时连接不可用（{e}），已回退 HTTP 轮询")),
+        // Komari's legacy `/api/clients` WebSocket accepts a Bearer API Key
+        // during the handshake, but its hidden-node filtering only checks a
+        // browser `session_token` cookie. Consequently hidden nodes are
+        // omitted from the live payload and appear as empty/offline here.
+        // With an API Key, use the authenticated REST path directly: both
+        // `/api/nodes` and `/api/recent/{uuid}` receive the Bearer header.
+        if !requires_authenticated_http(&settings) {
+            match ws_session(&app, &client, &settings, &mut rx).await {
+                Ok(()) => continue, // settings changed -> reconnect with new config
+                Err(e) => {
+                    set_error(&app, &format!("实时连接不可用（{e}），已回退 HTTP 轮询"))
+                }
+            }
+        } else {
+            log::info!("已配置 API Key，使用认证 HTTP 轮询获取完整节点信息");
         }
         match http_loop(&app, &client, &settings, &mut rx).await {
             Ok(()) => continue,
@@ -57,6 +69,10 @@ fn build_client(s: &Settings) -> reqwest::Client {
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_default()
+}
+
+fn requires_authenticated_http(s: &Settings) -> bool {
+    !s.api_key.is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +322,15 @@ fn origin_of_safe(base: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_key_uses_authenticated_http_transport() {
+        let mut settings = Settings::default();
+        assert!(!requires_authenticated_http(&settings));
+
+        settings.api_key = "secret".into();
+        assert!(requires_authenticated_http(&settings));
+    }
 
     #[test]
     fn ws_parse_keeps_nodes_without_live_data() {

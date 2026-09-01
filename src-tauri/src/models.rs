@@ -17,6 +17,7 @@ pub struct Settings {
     pub mem_warn_pct: f64,
     pub accept_invalid_certs: bool,
     pub chart_range_secs: u64,
+    pub theme: ThemeMode,
 }
 
 impl Default for Settings {
@@ -32,8 +33,18 @@ impl Default for Settings {
             mem_warn_pct: 85.0,
             accept_invalid_certs: false,
             chart_range_secs: CHART_RANGE_DEFAULT,
+            theme: ThemeMode::System,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 /// Selectable display ranges (seconds) for the tray network chart.
@@ -514,6 +525,17 @@ pub fn report_to_snapshot(info: &ClientInfo, online: bool, r: &Report) -> NodeSn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn theme_defaults_for_existing_settings_and_serializes() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.theme, ThemeMode::System);
+
+        let mut dark = Settings::default();
+        dark.theme = ThemeMode::Dark;
+        let json = serde_json::to_value(&dark).unwrap();
+        assert_eq!(json["theme"], "dark");
+    }
 
     #[test]
     fn normalize_base_variants() {

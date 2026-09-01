@@ -3,7 +3,10 @@ use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_autostart::ManagerExt as _;
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
+use tiny_skia::{
+    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke,
+    Transform,
+};
 
 use crate::models::{
     aggregate, fmt_rate, icon_state, scoped_nodes, Aggregate, IconState,
@@ -23,10 +26,14 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     *MENU_CACHE.lock() = Some(cache);
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(tauri::image::Image::new_owned(
-            draw_icon(&IconState { severity: Severity::Down, gauge: None, badge: false }),
+            draw_icon(
+                &IconState { severity: Severity::Down, gauge: None, badge: false },
+                icon_foreground(app),
+            ),
             ICON_SIZE,
             ICON_SIZE,
         ))
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("Hotaru · 正在连接后端…")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -74,19 +81,18 @@ pub fn apply(app: &AppHandle) {
     let agg = aggregate(&scope);
     let state = icon_state(&settings, &snap);
 
-    let _ = tray.set_icon(Some(tauri::image::Image::new_owned(
-        draw_icon(&state),
+    let _ = tray.set_icon_with_as_template(Some(tauri::image::Image::new_owned(
+        draw_icon(&state, icon_foreground(app)),
         ICON_SIZE,
         ICON_SIZE,
-    )));
+    )), cfg!(target_os = "macos"));
     let _ = tray.set_tooltip(Some(tooltip_text(&snap, &agg)));
 
     #[cfg(target_os = "macos")]
-    if settings.show_menu_bar_text {
-        let _ = tray.set_title(Some(menu_bar_text(&agg)));
-    } else {
-        let _ = tray.set_title(None::<String>);
-    }
+    // tray-icon 0.24.x ignores `None` on macOS instead of clearing the
+    // existing NSStatusBarButton title. An explicit empty string both clears
+    // the stale text and makes AppKit recalculate the status item width.
+    let _ = tray.set_title(Some(menu_bar_title(settings.show_menu_bar_text, &agg)));
 
     sync_menu(app);
 }
@@ -165,7 +171,7 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     }
 }
 
-fn refresh(app: &AppHandle) {
+pub fn refresh(app: &AppHandle) {
     let a = app.clone();
     let _ = app.run_on_main_thread(move || apply(&a));
 }
@@ -186,9 +192,18 @@ fn tooltip_text(snap: &MonitorSnapshot, agg: &Aggregate) -> String {
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn menu_bar_text(agg: &Aggregate) -> String {
     format!("↑{} ↓{}", fmt_rate(agg.net_up), fmt_rate(agg.net_down))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn menu_bar_title(show: bool, agg: &Aggregate) -> String {
+    if show {
+        menu_bar_text(agg)
+    } else {
+        String::new()
+    }
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -200,50 +215,87 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_menu_bar_text_is_explicitly_empty() {
+        let agg = Aggregate::default();
+        assert_eq!(menu_bar_title(false, &agg), "");
+        assert!(!menu_bar_title(true, &agg).is_empty());
+    }
+
+    #[test]
+    fn tray_icon_is_monochrome_and_states_have_distinct_shapes() {
+        let color = Color::from_rgba8(0, 0, 0, 255);
+        let normal = draw_icon(
+            &IconState { severity: Severity::Ok, gauge: Some(42.0), badge: false },
+            color,
+        );
+        let warning = draw_icon(
+            &IconState { severity: Severity::Warn, gauge: Some(88.0), badge: false },
+            color,
+        );
+        let offline = draw_icon(
+            &IconState { severity: Severity::Down, gauge: None, badge: false },
+            color,
+        );
+
+        for pixel in normal.chunks_exact(4).filter(|p| p[3] > 0) {
+            assert_eq!(&pixel[..3], &[0, 0, 0]);
+        }
+        assert_ne!(normal, warning);
+        assert_ne!(normal, offline);
+        assert_ne!(warning, offline);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Icon drawing (tiny-skia, 32x32 RGBA)
 // ---------------------------------------------------------------------------
 
 const ICON_SIZE: u32 = 32;
 
-fn draw_icon(state: &IconState) -> Vec<u8> {
+fn icon_foreground(app: &AppHandle) -> Color {
+    #[cfg(target_os = "windows")]
+    {
+        let theme = app
+            .webview_windows()
+            .values()
+            .find_map(|window| window.theme().ok())
+            .unwrap_or_else(|| match app.state::<AppState>().settings.read().theme {
+                crate::models::ThemeMode::Dark => tauri::Theme::Dark,
+                _ => tauri::Theme::Light,
+            });
+        return match theme {
+            tauri::Theme::Dark => Color::from_rgba8(0xF5, 0xF5, 0xF7, 0xFF),
+            _ => Color::from_rgba8(0x1D, 0x1D, 0x1F, 0xFF),
+        };
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Color::from_rgba8(0, 0, 0, 0xFF)
+    }
+}
+
+fn draw_icon(state: &IconState, color: Color) -> Vec<u8> {
     let Some(mut pm) = Pixmap::new(ICON_SIZE, ICON_SIZE) else {
         return vec![0; (ICON_SIZE * ICON_SIZE * 4) as usize];
     };
-    let track = Color::from_rgba8(0x94, 0xA3, 0xB8, 0x59);
-    draw_ring(&mut pm, 16.0, 16.0, 12.5, 3.4, -90.0, 270.0, track);
+    draw_status_symbol(&mut pm, color);
 
-    if let Some(gauge) = state.gauge {
-        let color = match state.severity {
-            Severity::Ok => Color::from_rgba8(0x34, 0xD3, 0x99, 0xFF),
-            Severity::Warn => Color::from_rgba8(0xFB, 0xBF, 0x24, 0xFF),
-            Severity::Err => Color::from_rgba8(0xF8, 0x71, 0x71, 0xFF),
-            Severity::Down => Color::from_rgba8(0x94, 0xA3, 0xB8, 0xFF),
-        };
-        let span = (360.0 * gauge.clamp(0.0, 100.0) / 100.0) as f32;
-        if span >= 1.0 {
-            draw_ring(&mut pm, 16.0, 16.0, 12.5, 3.4, -90.0, -90.0 + span, color);
-        }
-        // small center dot
+    let offline = state.severity == Severity::Down
+        || (state.severity == Severity::Err && state.gauge.is_none());
+    if offline {
+        draw_slash(&mut pm, color);
+    } else if state.badge || matches!(state.severity, Severity::Warn | Severity::Err) {
         let mut pb = PathBuilder::new();
-        pb.push_circle(16.0, 16.0, 1.8);
+        let radius = if state.severity == Severity::Err { 3.2 } else { 2.6 };
+        pb.push_circle(26.0, 6.0, radius);
         if let Some(path) = pb.finish() {
             fill(&mut pm, &path, color);
-        }
-    } else if state.severity == Severity::Down {
-        draw_slash(&mut pm, Color::from_rgba8(0x9C, 0xA3, 0xAF, 0xE6));
-    }
-
-    if state.badge {
-        let mut pb = PathBuilder::new();
-        pb.push_circle(25.5, 6.5, 5.2);
-        if let Some(path) = pb.finish() {
-            fill(&mut pm, &path, Color::from_rgba8(0x1F, 0x29, 0x37, 0xD9));
-        }
-        let mut pb = PathBuilder::new();
-        pb.push_circle(25.5, 6.5, 3.8);
-        if let Some(path) = pb.finish() {
-            fill(&mut pm, &path, Color::from_rgba8(0xF8, 0x71, 0x71, 0xFF));
         }
     }
 
@@ -255,6 +307,25 @@ fn draw_icon(state: &IconState) -> Vec<u8> {
     rgba
 }
 
+fn draw_status_symbol(pm: &mut Pixmap, color: Color) {
+    let mut ring = PathBuilder::new();
+    ring.push_circle(16.0, 16.0, 11.1);
+    if let Some(path) = ring.finish() {
+        stroke(pm, &path, color, 2.9);
+    }
+
+    let mut pulse = PathBuilder::new();
+    pulse.move_to(7.55, 16.0);
+    pulse.line_to(11.73, 16.0);
+    pulse.line_to(13.95, 11.2);
+    pulse.line_to(17.78, 20.71);
+    pulse.line_to(20.53, 14.22);
+    pulse.line_to(24.44, 14.22);
+    if let Some(path) = pulse.finish() {
+        stroke(pm, &path, color, 2.9);
+    }
+}
+
 fn fill(pm: &mut Pixmap, path: &tiny_skia::Path, color: Color) {
     let paint = Paint {
         shader: tiny_skia::Shader::SolidColor(color),
@@ -264,50 +335,26 @@ fn fill(pm: &mut Pixmap, path: &tiny_skia::Path, color: Color) {
     pm.fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
 }
 
-/// Filled donut sector (annulus arc) from start_deg to end_deg.
-fn draw_ring(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, w: f32, start_deg: f32, end_deg: f32, color: Color) {
-    let path = donut_path(cx, cy, r + w / 2.0, r - w / 2.0, start_deg, end_deg);
-    if let Some(path) = path {
-        fill(pm, &path, color);
-    }
-}
-
-fn donut_path(cx: f32, cy: f32, r_out: f32, r_in: f32, start_deg: f32, end_deg: f32) -> Option<tiny_skia::Path> {
-    if end_deg - start_deg < 0.5 {
-        return None;
-    }
-    let span = end_deg - start_deg;
-    let steps = ((span / 4.0).ceil() as usize).max(1);
-    let mut pb = PathBuilder::new();
-    for i in 0..=steps {
-        let t = (start_deg + span * i as f32 / steps as f32).to_radians();
-        let (x, y) = (cx + r_out * t.cos(), cy + r_out * t.sin());
-        if i == 0 {
-            pb.move_to(x, y);
-        } else {
-            pb.line_to(x, y);
-        }
-    }
-    for i in (0..=steps).rev() {
-        let t = (start_deg + span * i as f32 / steps as f32).to_radians();
-        pb.line_to(cx + r_in * t.cos(), cy + r_in * t.sin());
-    }
-    pb.close();
-    pb.finish()
+fn stroke(pm: &mut Pixmap, path: &tiny_skia::Path, color: Color, width: f32) {
+    let paint = Paint {
+        shader: tiny_skia::Shader::SolidColor(color),
+        anti_alias: true,
+        ..Default::default()
+    };
+    let stroke = Stroke {
+        width,
+        line_cap: LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Default::default()
+    };
+    pm.stroke_path(path, &paint, &stroke, Transform::identity(), None);
 }
 
 fn draw_slash(pm: &mut Pixmap, color: Color) {
-    let (x0, y0, x1, y1) = (9.0f32, 9.0f32, 23.0f32, 23.0f32);
-    let (dx, dy) = (x1 - x0, y1 - y0);
-    let len = (dx * dx + dy * dy).sqrt();
-    let (nx, ny) = (-dy / len * 1.75, dx / len * 1.75);
     let mut pb = PathBuilder::new();
-    pb.move_to(x0 + nx, y0 + ny);
-    pb.line_to(x1 + nx, y1 + ny);
-    pb.line_to(x1 - nx, y1 - ny);
-    pb.line_to(x0 - nx, y0 - ny);
-    pb.close();
+    pb.move_to(7.0, 7.0);
+    pb.line_to(25.0, 25.0);
     if let Some(path) = pb.finish() {
-        fill(pm, &path, color);
+        stroke(pm, &path, color, 3.5);
     }
 }

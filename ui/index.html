@@ -6,9 +6,27 @@
 <title>Hotaru 设置</title>
 <style>
   :root {
-    --bg: #0b1220; --panel: #111a2c; --field: #0d1626; --border: #22304a;
-    --text: #e6edf7; --muted: #8fa1bb; --accent: #34d399; --accent2: #38bdf8;
-    --danger: #f87171; --warn: #fbbf24;
+    color-scheme: light;
+    --bg: #f3f5f8; --panel: #ffffff; --field: #f8fafc; --border: #d7dee8;
+    --text: #172033; --muted: #5d6b7e; --accent: #059669; --accent2: #0284c7;
+    --danger: #dc2626; --warn: #b45309; --button: #edf1f6; --button-hover: #e2e8f0;
+    --toast-bg: #ecfdf5; --logo-ink: #0b1220;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0b1220; --panel: #111a2c; --field: #0d1626; --border: #2b3a56;
+    --text: #e6edf7; --muted: #a7b6ca; --accent: #34d399; --accent2: #38bdf8;
+    --danger: #f87171; --warn: #fbbf24; --button: #1a2740; --button-hover: #223154;
+    --toast-bg: #052e22; --logo-ink: #0b1220;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]):not([data-theme="dark"]) {
+      color-scheme: dark;
+      --bg: #0b1220; --panel: #111a2c; --field: #0d1626; --border: #2b3a56;
+      --text: #e6edf7; --muted: #a7b6ca; --accent: #34d399; --accent2: #38bdf8;
+      --danger: #f87171; --warn: #fbbf24; --button: #1a2740; --button-hover: #223154;
+      --toast-bg: #052e22; --logo-ink: #0b1220;
+    }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -24,7 +42,7 @@
     background: linear-gradient(135deg, #34d399, #38bdf8);
     display: flex; align-items: center; justify-content: center;
   }
-  .logo svg { width: 18px; height: 18px; }
+  .logo svg { width: 18px; height: 18px; stroke: var(--logo-ink); }
   section {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 12px; padding: 16px; margin-bottom: 14px;
@@ -51,9 +69,9 @@
   .radio-row .check { margin: 0; }
   .btn {
     padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
-    background: #1a2740; color: var(--text); cursor: pointer; font-size: 13px;
+    background: var(--button); color: var(--text); cursor: pointer; font-size: 13px;
   }
-  .btn:hover { background: #223154; }
+  .btn:hover { background: var(--button-hover); }
   .btn:disabled { opacity: .5; cursor: default; }
   .btn.primary { background: var(--accent); color: #06281c; border-color: transparent; font-weight: 600; }
   .btn.primary:hover { filter: brightness(1.08); }
@@ -63,6 +81,19 @@
   #testResult { margin-top: 10px; font-size: 12px; color: var(--muted); min-height: 16px; word-break: break-all; }
   #testResult.ok { color: var(--accent); }
   #testResult.err { color: var(--danger); }
+  .about-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .about-product { display: flex; flex-direction: column; gap: 2px; }
+  .about-product strong { font-size: 16px; font-weight: 600; }
+  .about-version { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .about-copy { color: var(--muted); font-size: 12px; margin: 12px 0; }
+  .about-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .github-btn { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .github-btn svg { width: 15px; height: 15px; fill: currentColor; }
+  #updateStatus { min-height: 18px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+  #updateStatus.ok { color: var(--accent); }
+  #updateStatus.update { color: var(--warn); }
+  #updateStatus.err { color: var(--danger); }
+  [hidden] { display: none !important; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th { color: var(--muted); font-weight: 600; }
@@ -80,7 +111,7 @@
   }
   #toast {
     position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
-    background: #052e22; color: var(--accent); border: 1px solid var(--accent);
+    background: var(--toast-bg); color: var(--accent); border: 1px solid var(--accent);
     padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .25s;
     pointer-events: none; font-size: 13px; z-index: 10;
   }
@@ -100,6 +131,18 @@
     </div>
     <h1>Hotaru 设置</h1>
   </header>
+
+  <section>
+    <h2>外观</h2>
+    <label class="field" style="margin-bottom:0;">
+      <span>主题</span>
+      <select id="theme" aria-label="应用主题">
+        <option value="system">跟随系统</option>
+        <option value="light">亮色</option>
+        <option value="dark">暗色</option>
+      </select>
+    </label>
+  </section>
 
   <section>
     <h2>连接</h2>
@@ -139,7 +182,7 @@
         <input type="number" id="memWarn" min="1" max="100">
       </label>
     </div>
-    <p class="hint">图标颜色：绿 = 正常，黄 = 超过告警阈值，红 = 严重/离线，灰 = 后端不可达。汇总模式下有节点离线时图标右上角显示红点。</p>
+    <p class="hint">菜单栏图标使用系统单色样式：完整状态环 = 正常，右上圆点 = 超过告警阈值或部分节点离线，斜杠 = 全部离线或后端不可达。</p>
     <label class="check">
       <input type="checkbox" id="autostart"> 开机自启
     </label>
@@ -158,6 +201,26 @@
     </label>
     <p class="hint">汇总上下行速率的历史曲线。数据仅保存在内存中（固定保留 6 小时），重启应用后清空；曲线时间粒度与刷新间隔一致。</p>
   </section>
+
+  <section id="about">
+    <h2>关于</h2>
+    <div class="about-head">
+      <div class="about-product">
+        <strong>Hotaru</strong>
+        <span class="about-version">版本 <span id="appVersion">…</span></span>
+      </div>
+      <button class="btn github-btn" id="githubBtn" type="button" aria-label="在浏览器中打开 Hotaru GitHub 仓库">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7A11.5 11.5 0 0 0 8.36 23.1c.58.1.79-.25.79-.56v-2.23c-3.23.7-3.91-1.37-3.91-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.58-.3-5.29-1.29-5.29-5.73 0-1.27.45-2.3 1.2-3.12-.12-.3-.52-1.48.11-3.08 0 0 .98-.31 3.16 1.19a10.9 10.9 0 0 1 5.76 0c2.19-1.5 3.16-1.19 3.16-1.19.63 1.6.23 2.78.11 3.08.75.82 1.2 1.85 1.2 3.12 0 4.46-2.72 5.43-5.3 5.72.42.36.79 1.07.79 2.16v3.2c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"/></svg>
+        GitHub
+      </button>
+    </div>
+    <p class="about-copy">Komari 的 macOS 与 Windows 托盘监控应用。</p>
+    <div class="about-actions">
+      <button class="btn" id="checkUpdateBtn" type="button">检查更新</button>
+      <button class="btn primary" id="viewReleaseBtn" type="button" hidden>查看新版本</button>
+    </div>
+    <div id="updateStatus" role="status" aria-live="polite" aria-atomic="true"></div>
+  </section>
 </main>
 
 <footer>
@@ -172,6 +235,13 @@ const { invoke } = window.__TAURI__.core;
 
 const $ = (id) => document.getElementById(id);
 const isMac = /Mac/i.test(navigator.userAgent);
+let currentSettings = {};
+
+function applyTheme(theme) {
+  const value = ['system', 'light', 'dark'].includes(theme) ? theme : 'system';
+  if (value === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.dataset.theme = value;
+}
 
 function toast(text) {
   const t = $('toast');
@@ -183,6 +253,7 @@ function toast(text) {
 
 function collect() {
   return {
+    ...currentSettings,
     backend_url: $('backendUrl').value.trim(),
     api_key: $('apiKey').value.trim(),
     poll_interval_secs: Math.max(1, Math.min(60, Number($('pollInterval').value) || 3)),
@@ -191,10 +262,12 @@ function collect() {
     mem_warn_pct: Math.max(1, Math.min(100, Number($('memWarn').value) || 85)),
     accept_invalid_certs: $('acceptInvalid').checked,
     chart_range_secs: Number($('chartRange').value) || 900,
+    theme: $('theme').value,
   };
 }
 
 function fillSettings(s) {
+  currentSettings = { ...s };
   $('backendUrl').value = s.backend_url || '';
   $('apiKey').value = s.api_key || '';
   $('pollInterval').value = s.poll_interval_secs ?? 3;
@@ -204,12 +277,24 @@ function fillSettings(s) {
   $('acceptInvalid').checked = !!s.accept_invalid_certs;
   $('chartRange').value = String(s.chart_range_secs ?? 900);
   if ($('chartRange').selectedIndex === -1) $('chartRange').value = '900';
+  $('theme').value = s.theme || 'system';
+  if ($('theme').selectedIndex === -1) $('theme').value = 'system';
+  applyTheme($('theme').value);
 }
 
 
 
 async function refreshAutostart() {
   try { $('autostart').checked = await invoke('get_autostart'); } catch (_) {}
+}
+
+async function loadAppInfo() {
+  try {
+    const info = await invoke('get_app_info');
+    $('appVersion').textContent = info.version;
+  } catch (e) {
+    $('appVersion').textContent = '未知';
+  }
 }
 
 async function boot() {
@@ -219,7 +304,7 @@ async function boot() {
   } catch (e) {
     console.error(e);
   }
-  await refreshAutostart();
+  await Promise.all([refreshAutostart(), loadAppInfo()]);
 }
 
 $('saveBtn').addEventListener('click', async () => {
@@ -260,6 +345,55 @@ $('autostart').addEventListener('change', async (e) => {
   } catch (err) {
     e.target.checked = !e.target.checked;
     toast('设置开机自启失败：' + err);
+  }
+});
+
+$('theme').addEventListener('change', (e) => applyTheme(e.target.value));
+
+async function openGithub(page) {
+  try {
+    await invoke('open_github_page', { page });
+  } catch (e) {
+    toast('无法打开 GitHub：' + e);
+  }
+}
+
+$('githubBtn').addEventListener('click', () => openGithub('repository'));
+$('viewReleaseBtn').addEventListener('click', () => openGithub('releases'));
+
+$('checkUpdateBtn').addEventListener('click', async () => {
+  const btn = $('checkUpdateBtn');
+  const out = $('updateStatus');
+  const releaseBtn = $('viewReleaseBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '检查中…';
+  out.className = '';
+  out.textContent = '正在连接 GitHub…';
+  out.setAttribute('aria-busy', 'true');
+  releaseBtn.hidden = true;
+  try {
+    const result = await invoke('check_for_updates');
+    $('appVersion').textContent = result.current_version;
+    if (result.update_available) {
+      out.className = 'update';
+      out.textContent = `发现新版本 v${result.latest_version}，当前为 v${result.current_version}`;
+      releaseBtn.textContent = `查看 v${result.latest_version}`;
+      releaseBtn.hidden = false;
+    } else if (result.current_version === result.latest_version) {
+      out.className = 'ok';
+      out.textContent = `已是最新版本 v${result.current_version}`;
+    } else {
+      out.className = 'ok';
+      out.textContent = `当前版本 v${result.current_version} 高于 GitHub 最新版本 v${result.latest_version}`;
+    }
+  } catch (e) {
+    out.className = 'err';
+    out.textContent = '检查更新失败：' + String(e);
+  } finally {
+    out.removeAttribute('aria-busy');
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 });
 

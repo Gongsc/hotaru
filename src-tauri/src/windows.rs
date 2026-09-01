@@ -2,7 +2,7 @@ use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, Web
 #[cfg(target_os = "macos")]
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 
-use crate::models::normalize_base;
+use crate::models::{normalize_base, ThemeMode};
 use crate::state::AppState;
 
 /// Logical size of the chart popover. Height depends on the node count so
@@ -15,6 +15,22 @@ fn chart_logical_size(node_count: usize) -> (f64, f64) {
 /// Ignore tray clicks that arrive right after the popover auto-hid on blur,
 /// so the same click does not instantly reopen it (toggle semantics).
 const CHART_REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(700);
+
+fn native_theme(theme: ThemeMode) -> Option<tauri::Theme> {
+    match theme {
+        ThemeMode::System => None,
+        ThemeMode::Light => Some(tauri::Theme::Light),
+        ThemeMode::Dark => Some(tauri::Theme::Dark),
+    }
+}
+
+/// Keep WebView media queries, native controls and macOS vibrancy on the
+/// same appearance. On macOS this is app-wide; Windows applies it per window.
+pub fn sync_theme(app: &AppHandle, theme: ThemeMode) {
+    for window in app.webview_windows().values() {
+        let _ = window.set_theme(native_theme(theme));
+    }
+}
 
 /// Recreate the panel webview from scratch. Recover even from a crashed
 /// renderer, where an in-page `location.reload()` would never run. The new
@@ -198,8 +214,10 @@ fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
     let url: url::Url = base
         .parse()
         .map_err(|_| tauri::Error::WindowNotFound)?;
+    let theme = app.state::<AppState>().settings.read().theme;
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
         .title("Hotaru Panel")
+        .theme(native_theme(theme))
         .inner_size(1200.0, 800.0)
         .min_inner_size(780.0, 560.0)
         .build()?;
@@ -262,8 +280,10 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
             window
         }
         None => {
+            let theme = app.state::<AppState>().settings.read().theme;
             let builder = WebviewWindowBuilder::new(app, "chart", WebviewUrl::App("chart.html".into()))
                 .title("Hotaru")
+                .theme(native_theme(theme))
                 .inner_size(cw, ch)
                 .decorations(false);
             // WKWebView otherwise paints an opaque white surface behind the
@@ -369,12 +389,14 @@ fn open_settings_on_main(app: &AppHandle) {
             let _ = window.set_focus();
         }
         None => {
+            let theme = app.state::<AppState>().settings.read().theme;
             let _ = WebviewWindowBuilder::new(
                 app,
                 "settings",
                 WebviewUrl::App("index.html".into()),
             )
             .title("Hotaru 设置")
+            .theme(native_theme(theme))
             .inner_size(540.0, 760.0)
             .min_inner_size(480.0, 600.0)
             .build();

@@ -1,14 +1,121 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use serde::Serialize;
-use tauri::{AppHandle, State};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt as _;
 
 use crate::models::{normalize_base, now_ms, ClientInfo, Envelope, MonitorSnapshot, NetPoint, Settings};
 use crate::settings;
 use crate::state::AppState;
 use crate::windows;
+
+const GITHUB_REPOSITORY_URL: &str = "https://github.com/Gongsc/hotaru";
+const GITHUB_RELEASES_URL: &str = "https://github.com/Gongsc/hotaru/releases/latest";
+const GITHUB_LATEST_RELEASE_API: &str =
+    "https://api.github.com/repos/Gongsc/hotaru/releases/latest";
+
+#[derive(Serialize)]
+pub struct AppInfo {
+    pub version: String,
+    pub repository_url: &'static str,
+}
+
+#[tauri::command]
+pub fn get_app_info(app: AppHandle) -> AppInfo {
+    AppInfo {
+        version: app.package_info().version.to_string(),
+        repository_url: GITHUB_REPOSITORY_URL,
+    }
+}
+
+#[derive(Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    html_url: String,
+    name: Option<String>,
+    published_at: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct UpdateCheckResult {
+    pub current_version: String,
+    pub latest_version: String,
+    pub update_available: bool,
+    pub release_url: String,
+    pub release_name: Option<String>,
+    pub published_at: Option<String>,
+}
+
+#[tauri::command]
+pub async fn check_for_updates(app: AppHandle) -> Result<UpdateCheckResult, String> {
+    let current = app.package_info().version.clone();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("无法初始化更新检查: {e}"))?;
+    let response = client
+        .get(GITHUB_LATEST_RELEASE_API)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header(reqwest::header::USER_AGENT, format!("Hotaru/{current}"))
+        .header("X-GitHub-Api-Version", "2026-03-10")
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 GitHub: {e}"))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err("GitHub 仓库尚未发布 Release".into());
+    }
+    if !status.is_success() {
+        return Err(format!("GitHub 返回 HTTP {status}"));
+    }
+    let release: GitHubRelease = response
+        .json()
+        .await
+        .map_err(|e| format!("GitHub Release 响应格式无效: {e}"))?;
+    let latest = parse_release_version(&release.tag_name)?;
+    Ok(UpdateCheckResult {
+        current_version: current.to_string(),
+        latest_version: latest.to_string(),
+        update_available: latest > current,
+        release_url: release.html_url,
+        release_name: release.name,
+        published_at: release.published_at,
+    })
+}
+
+fn parse_release_version(tag: &str) -> Result<semver::Version, String> {
+    semver::Version::parse(tag.trim().trim_start_matches(['v', 'V']))
+        .map_err(|_| format!("无法识别 Release 版本号：{tag}"))
+}
+
+fn github_page_url(page: &str) -> Option<&'static str> {
+    match page {
+        "repository" => Some(GITHUB_REPOSITORY_URL),
+        "releases" => Some(GITHUB_RELEASES_URL),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub fn open_github_page(page: String) -> Result<(), String> {
+    let url = github_page_url(&page).ok_or_else(|| "不支持的 GitHub 页面".to_string())?;
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(url)
+        .spawn();
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    return Err("当前平台不支持打开外部链接".into());
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    result
+        .map(|_| ())
+        .map_err(|e| format!("无法打开系统浏览器: {e}"))
+}
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
@@ -25,7 +132,10 @@ pub fn save_settings(
     settings::save(&app, &s)?;
     *state.settings.write() = s.clone();
     state.bump_config_epoch();
+    windows::sync_theme(&app, s.theme);
+    let _ = app.emit("theme://changed", s.theme);
     windows::sync_panel_url(&app, &s.backend_url);
+    crate::tray::refresh(&app);
     Ok(s)
 }
 
@@ -334,5 +444,23 @@ mod tests {
         assert_eq!(points[0].v, 42.5);
         assert_eq!(points[1].task_id, 9);
         assert_eq!(points[1].v, 1.0);
+    }
+
+    #[test]
+    fn release_versions_use_semver_ordering() {
+        assert_eq!(parse_release_version("v1.2.3").unwrap(), semver::Version::new(1, 2, 3));
+        assert!(parse_release_version("V2.0.0").unwrap() > semver::Version::new(1, 99, 99));
+        assert!(
+            parse_release_version("v1.2.3").unwrap()
+                > parse_release_version("v1.2.3-rc.1").unwrap()
+        );
+        assert!(parse_release_version("latest").is_err());
+    }
+
+    #[test]
+    fn github_links_are_allowlisted() {
+        assert_eq!(github_page_url("repository"), Some(GITHUB_REPOSITORY_URL));
+        assert_eq!(github_page_url("releases"), Some(GITHUB_RELEASES_URL));
+        assert_eq!(github_page_url("https://example.com"), None);
     }
 }

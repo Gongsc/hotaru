@@ -5,6 +5,7 @@
 <title>Hotaru</title>
 <style>
   :root {
+    color-scheme: light;
     --panel: rgba(246, 246, 248, .84);
     --border: rgba(0, 0, 0, .18);
     --ink: #1d1d1f;
@@ -22,12 +23,23 @@
     --tooltip-ink: #1d1d1f;
     --tooltip-border: rgba(0, 0, 0, .12);
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
+  :root[data-theme="dark"] {
+      color-scheme: dark;
       --panel: rgba(38, 38, 40, .78);
       --border: rgba(255, 255, 255, .14);
       --ink: #f2f2f4;
-      --ink-2: rgba(255, 255, 255, .45);
+      --ink-2: rgba(255, 255, 255, .58);
+      --grid: rgba(255, 255, 255, .10);
+      --btn: rgba(255, 255, 255, .10);
+      --chip: rgba(255, 255, 255, .12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]):not([data-theme="dark"]) {
+      color-scheme: dark;
+      --panel: rgba(38, 38, 40, .78);
+      --border: rgba(255, 255, 255, .14);
+      --ink: #f2f2f4;
+      --ink-2: rgba(255, 255, 255, .58);
       --grid: rgba(255, 255, 255, .10);
       --btn: rgba(255, 255, 255, .10);
       --chip: rgba(255, 255, 255, .12);
@@ -85,9 +97,9 @@
   .nrow .flag { flex: none; width: 18px; text-align: center; }
   .nrow .flag img { width: 18px; height: 12px; border-radius: 2px; display: inline-block; vertical-align: -1px; }
   .nrow .flag .code { font-size: 9.5px; font-weight: 600; color: var(--ink-2); }
-  .nrow .os { flex: none; width: 13px; height: 13px; color: var(--ink-2); display: flex; align-items: center; }
-  .nrow .os svg { width: 13px; height: 13px; }
-  .nrow .os img { width: 13px; height: 13px; }
+  .nrow .os { flex: none; width: 13px; height: 13px; color: var(--ink-2); display: flex; align-items: center; justify-content: center; }
+  .nrow .os svg { display: block; width: 13px; height: 13px; }
+  .nrow .os img { display: block; width: 13px; height: 13px; }
   .nrow .name { flex: 1; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .nrow .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--down); }
   .nrow .dot.off { background: var(--off); }
@@ -217,6 +229,21 @@ let lastDraw = 0;
 let backendOk = true;
 let onlineCount = null;
 let totalUp = 0, totalDown = 0;
+let themeMode = 'system';
+
+function applyTheme(theme) {
+  themeMode = ['system', 'light', 'dark'].includes(theme) ? theme : 'system';
+  if (themeMode === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.dataset.theme = themeMode;
+  lastDraw = 0;
+  scheduleDraw();
+}
+
+function isDarkTheme() {
+  if (themeMode === 'dark') return true;
+  if (themeMode === 'light') return false;
+  return matchMedia('(prefers-color-scheme: dark)').matches;
+}
 
 const cellTooltip = document.getElementById('cell-tooltip');
 const tipTime = cellTooltip.querySelector('.tip-time');
@@ -349,6 +376,7 @@ const OS_SVG = {
   windows: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.55 10.6 4.5v6.9H3zM11.6 4.35 21 3v8.4h-9.4zM3 12.6h7.6v6.9L3 18.45zM11.6 12.6H21V21l-9.4-1.35z"/></svg>',
   apple: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 12.9c0-2.2 1.8-3.3 1.9-3.4-1-1.5-2.6-1.7-3.2-1.7-1.4-.1-2.7.8-3.4.8-.7 0-1.8-.8-2.9-.8-1.5 0-2.9.9-3.7 2.2-1.6 2.7-.4 6.8 1.1 9 .7 1.1 1.6 2.3 2.8 2.2 1.1 0 1.5-.7 2.9-.7 1.3 0 1.7.7 2.9.7 1.2 0 2-1.1 2.7-2.2.9-1.2 1.2-2.4 1.2-2.5 0 0-2.3-.9-2.3-3.6zM14.4 5.6c.6-.8 1.1-1.8 1-2.9-.9 0-2.1.6-2.7 1.4-.6.7-1.2 1.8-1 2.8 1 .1 2-.5 2.7-1.3z"/></svg>',
   linux: '<span style="font-size:12px;line-height:1">🐧</span>',
+  unknown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
 };
 
 // 常见发行版 -> simple-icons CDN 图标;加载失败降级为 🐧
@@ -370,7 +398,7 @@ function osIcon(os) {
     }
   }
   if (s.includes('linux') || s.includes('unix') || s.includes('bsd')) return OS_SVG.linux;
-  return '';
+  return OS_SVG.unknown;
 }
 
 function renderHeader() {
@@ -543,7 +571,7 @@ function drawNetworkChart(cv, series, compact) {
   const ctx = cv.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const dark = isDarkTheme();
   const txt = dark ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.4)';
   const grid = dark ? 'rgba(255,255,255,.10)' : 'rgba(0,0,0,.08)';
   const padL = compact ? 38 : 44;
@@ -679,8 +707,10 @@ function buildNodes() {
       });
     }
     const osEl = row.querySelector('.os');
-    const os = osIcon(meta.os);
-    if (os) osEl.innerHTML = os; else osEl.remove();
+    osEl.innerHTML = osIcon(meta.os);
+    const osLabel = (meta.os || '').trim();
+    osEl.title = osLabel || '未知操作系统';
+    osEl.setAttribute('aria-label', osLabel ? '操作系统：' + osLabel : '未知操作系统');
     row.querySelector('.name').textContent = meta.name;
     row.querySelector('.name').title = meta.name;
     row.addEventListener('click', () => {
@@ -958,6 +988,7 @@ async function refresh() {
   try {
     const s = await invoke('get_settings');
     if (s.chart_range_secs) rangeSecs = s.chart_range_secs;
+    applyTheme(s.theme || 'system');
     cpuWarnPct = s.cpu_warn_pct || 80;
     memWarnPct = s.mem_warn_pct || 85;
   } catch (e) { /* keep current values */ }
@@ -1027,9 +1058,13 @@ document.getElementById('btn-settings').addEventListener('click', async () => {
 });
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') win.hide(); });
 window.addEventListener('resize', () => { lastDraw = 0; scheduleDraw(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (themeMode === 'system') applyTheme('system');
+});
 
 (async () => {
   await listen('monitor://update', (e) => ingestSnap(e.payload));
+  await listen('theme://changed', (e) => applyTheme(e.payload));
   // Refresh from process memory on focus; the page and node DOM stay alive.
   win.listen('tauri://focus', refresh);
   await restorePin();

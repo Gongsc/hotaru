@@ -22,6 +22,8 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(state::init(&handle));
+            let theme = handle.state::<AppState>().settings.read().theme;
+            windows::sync_theme(&handle, theme);
             tray::create(&handle)?;
             monitor::spawn(handle.clone());
             windows::spawn_panel_watchdog_loop(&handle);
@@ -42,6 +44,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
+            WindowEvent::ThemeChanged(_) => {
+                tray::refresh(window.app_handle());
+            }
             WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == "main" {
                     // Closing the panel hides it; the tray keeps running.
@@ -92,6 +97,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
+            commands::get_app_info,
+            commands::check_for_updates,
+            commands::open_github_page,
             commands::save_settings,
             commands::get_snapshot,
             commands::get_net_history,

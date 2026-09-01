@@ -74,7 +74,7 @@
   .k.up { background: var(--up); } .k.down { background: var(--down); }
   .legend b { font-weight: 600; }
   .totals { padding: 1px 14px 0; font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-  canvas#chart { display: block; width: 292px; height: 112px; margin: 6px auto 2px; flex: none; }
+  canvas#chart { display: block; width: 292px; height: 124px; margin: 6px auto 2px; flex: none; cursor: crosshair; }
 
   .sec-label { font-size: 11px; font-weight: 600; color: var(--ink-2); letter-spacing: .05em; padding: 6px 14px 4px; flex: none; }
   .nodes { flex: 1; min-height: 0; overflow: hidden; padding: 0 12px 6px; }
@@ -103,7 +103,7 @@
   .meta-grid span { display: flex; justify-content: space-between; gap: 5px; min-width: 0; }
   .meta-grid b { color: var(--ink); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .nbody .rates { font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; padding: 2px 0 3px; }
-  canvas.mini { display: block; width: 100%; height: 54px; }
+  canvas.mini { display: block; width: 100%; height: 82px; cursor: crosshair; }
   .bar-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-2); margin-top: 6px; }
   .bar-row .lbl { width: 26px; flex: none; }
   .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
@@ -298,13 +298,6 @@ function trafficUsed(meta) {
   }
 }
 
-function fmtAgo(ms) {
-  const m = ms / 60000;
-  if (m >= 60) return '-' + Math.round(m / 60) + 'h';
-  if (m >= 1) return '-' + Math.round(m) + 'm';
-  return '-' + Math.max(1, Math.round(ms / 1000)) + 's';
-}
-
 function fmtAxis(v) {
   if (v >= 1048576) return (v / 1048576).toFixed(1) + 'M';
   if (v >= 1024) return (v / 1024).toFixed(0) + 'K';
@@ -403,7 +396,12 @@ function bucketize(data, columns) {
     for (let j = i; j < end; j++) {
       up += data[j].up; down += data[j].down; cnt++;
     }
-    out.push({ t: data[Math.floor((i + end - 1) / 2)].t, up: up / cnt, down: down / cnt });
+    out.push({
+      t: data[Math.floor((i + end - 1) / 2)].t,
+      up: up / cnt,
+      down: down / cnt,
+      online: data[end - 1].online,
+    });
   }
   return out;
 }
@@ -439,8 +437,105 @@ function strokeSeries(ctx, data, xOf, yOf, padT, padH) {
   });
 }
 
-function drawAggregate() {
-  const cv = document.getElementById('chart');
+const AXIS_TIME_FORMAT = new Intl.DateTimeFormat('zh-CN', {
+  hour: '2-digit', minute: '2-digit', hour12: false,
+});
+
+function roundedRectPath(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
+function nearestByTime(data, target) {
+  let lo = 0, hi = data.length - 1;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (data[mid].t < target) lo = mid + 1; else hi = mid;
+  }
+  if (lo > 0 && Math.abs(data[lo - 1].t - target) < Math.abs(data[lo].t - target)) return data[lo - 1];
+  return data[lo];
+}
+
+function drawChartHover(ctx, state) {
+  const { cv, data, hover, xOf, yOf, start, spanMs, padL, padR, padT, padB, W, H, dark } = state;
+  if (!hover || !data.length || hover.x < padL || hover.x > W - padR || hover.y < padT || hover.y > H - padB) return;
+
+  const target = start + ((hover.x - padL) / (W - padL - padR)) * spanMs;
+  const point = nearestByTime(data, target);
+  const x = xOf(point.t);
+  const upY = yOf(point.up), downY = yOf(point.down);
+  const cross = dark ? 'rgba(255,255,255,.34)' : 'rgba(0,0,0,.28)';
+
+  ctx.save();
+  ctx.strokeStyle = cross;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H - padB); ctx.stroke();
+  ctx.setLineDash([]);
+
+  [['#38bdf8', upY], ['#34d399', downY]].forEach(([color, y]) => {
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.strokeStyle = dark ? '#252527' : '#f6f6f8'; ctx.lineWidth = 1.5; ctx.stroke();
+  });
+
+  ctx.font = '10px -apple-system, "Segoe UI", sans-serif';
+  const timeText = CELL_TIME_FORMAT.format(new Date(point.t));
+  const status = point.online === false ? '离线 · ' : '';
+  const valueText = status + '↑ ' + fmtRate(point.up) + '  ↓ ' + fmtRate(point.down);
+  const boxW = Math.ceil(Math.max(ctx.measureText(timeText).width, ctx.measureText(valueText).width)) + 14;
+  const boxH = 34;
+  const boxX = Math.max(3, Math.min(W - boxW - 3, x - boxW / 2));
+  const boxY = padT + 3;
+  roundedRectPath(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.fillStyle = dark ? 'rgba(239,239,242,.96)' : 'rgba(38,38,40,.94)';
+  ctx.fill();
+  ctx.fillStyle = dark ? '#1d1d1f' : '#f7f7f8';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(timeText, boxX + boxW / 2, boxY + 10);
+  ctx.font = '600 10px -apple-system, "Segoe UI", sans-serif';
+  ctx.fillText(valueText, boxX + boxW / 2, boxY + 24);
+  ctx.restore();
+  cv.setAttribute('aria-label', timeText + '，' + valueText);
+}
+
+function requestChartRedraw(cv) {
+  if (cv._hoverFrame) return;
+  cv._hoverFrame = requestAnimationFrame(() => {
+    cv._hoverFrame = null;
+    if (cv.id === 'chart') drawAggregate();
+    else drawMini(cv, cv._series || []);
+  });
+}
+
+function bindChartHover(cv) {
+  if (cv._hoverBound) return;
+  cv._hoverBound = true;
+  cv.addEventListener('pointermove', (event) => {
+    const rect = cv.getBoundingClientRect();
+    cv._hover = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    requestChartRedraw(cv);
+  });
+  cv.addEventListener('pointerleave', () => {
+    cv._hover = null;
+    cv.removeAttribute('aria-label');
+    requestChartRedraw(cv);
+  });
+}
+
+function drawNetworkChart(cv, series, compact) {
+  if (!cv.clientWidth) return;
+  bindChartHover(cv);
+  cv._series = series;
+  cv.setAttribute('role', 'img');
+  cv.setAttribute('aria-label', compact ? '节点网络速率曲线' : '总览网络速率曲线');
   const dpr = window.devicePixelRatio || 1;
   const W = cv.clientWidth, H = cv.clientHeight;
   if (!W || !H) return;
@@ -451,7 +546,11 @@ function drawAggregate() {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches;
   const txt = dark ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.4)';
   const grid = dark ? 'rgba(255,255,255,.10)' : 'rgba(0,0,0,.08)';
-  const padL = 46, padR = 8, padT = 8, padB = 16, pw = W - padL - padR, ph = H - padT - padB;
+  const padL = compact ? 38 : 44;
+  const padR = compact ? 4 : 7;
+  const padT = compact ? 5 : 8;
+  const padB = compact ? 16 : 18;
+  const pw = W - padL - padR, ph = H - padT - padB;
 
   const now = Date.now();
   const start = now - rangeSecs * 1000;
@@ -459,79 +558,66 @@ function drawAggregate() {
   const xOf = (t) => padL + pw * Math.min(1, Math.max(0, (t - start) / spanMs));
 
   ctx.lineWidth = 1;
-  ctx.font = '9.5px -apple-system, "Segoe UI", sans-serif';
+  ctx.font = (compact ? '8.5px' : '9.5px') + ' -apple-system, "Segoe UI", sans-serif';
+  ctx.fillStyle = txt;
 
-  for (let g = 0; g < 4; g++) {
-    const y = padT + (ph * g) / 3;
+  const yTicks = compact ? 3 : 4;
+  for (let g = 0; g < yTicks; g++) {
+    const y = padT + (ph * g) / (yTicks - 1);
     ctx.strokeStyle = grid;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
   }
 
+  const xTicks = compact ? 3 : 4;
   ctx.textAlign = 'center';
   ctx.fillStyle = txt;
-  for (let i = 1; i <= 3; i++) {
-    ctx.fillText(fmtAgo(spanMs - (spanMs * i) / 4), padL + (pw * i) / 4, H - 4);
+  for (let i = 0; i < xTicks; i++) {
+    const ratio = i / (xTicks - 1);
+    const x = padL + pw * ratio;
+    if (i > 0 && i < xTicks - 1) {
+      ctx.strokeStyle = grid;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H - padB); ctx.stroke();
+    }
+    ctx.textAlign = i === 0 ? 'left' : i === xTicks - 1 ? 'right' : 'center';
+    ctx.fillText(AXIS_TIME_FORMAT.format(new Date(start + spanMs * ratio)), x, H - 4);
   }
-  ctx.fillText('现在', W - padR - 12, H - 4);
 
-  const visible = points.filter((p) => p.t >= start);
+  const visible = (series || []).filter((p) => p.t >= start);
+  const max = niceCeil(visible.length
+    ? Math.max(...visible.map((p) => Math.max(p.up, p.down))) * 1.12
+    : 0);
+  const yOf = (v) => padT + ph * (1 - Math.min(1, v / max));
+
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  for (let g = 0; g < yTicks; g++) {
+    ctx.fillStyle = txt;
+    const value = max * (1 - g / (yTicks - 1));
+    ctx.fillText(fmtAxis(value), padL - 5, padT + (ph * g) / (yTicks - 1) + 3);
+  }
+
   if (visible.length < 2) {
     ctx.fillStyle = txt;
-    ctx.font = '12px -apple-system, "Segoe UI", sans-serif';
+    ctx.font = (compact ? '10.5px' : '12px') + ' -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
     ctx.fillText('正在积累数据…', W / 2, padT + ph / 2 - 6);
     return;
   }
 
   const data = bucketize(visible, Math.max(2, Math.floor(pw)));
-  const max = niceCeil(Math.max(...data.map((p) => Math.max(p.up, p.down))) * 1.12);
-  const yOf = (v) => padT + ph * (1 - Math.min(1, v / max));
-
-  ctx.textAlign = 'right';
-  for (let g = 0; g < 4; g++) {
-    ctx.fillStyle = txt;
-    ctx.fillText(fmtAxis(max * (1 - g / 3)), padL - 6, padT + (ph * g) / 3 + 3);
-  }
-
   strokeSeries(ctx, data, xOf, yOf, padT, ph);
+  drawChartHover(ctx, {
+    cv, data, hover: cv._hover, xOf, yOf, start, spanMs,
+    padL, padR, padT, padB, W, H, dark,
+  });
+}
+
+function drawAggregate() {
+  drawNetworkChart(document.getElementById('chart'), points, false);
 }
 
 function drawMini(cv, series) {
-  if (!cv.clientWidth) return; // collapsed
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth, H = cv.clientHeight;
-  cv.width = W * dpr; cv.height = H * dpr;
-  const ctx = cv.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-  const grid = dark ? 'rgba(255,255,255,.10)' : 'rgba(0,0,0,.08)';
-  const txt = dark ? 'rgba(255,255,255,.4)' : 'rgba(0,0,0,.35)';
-  const padT = 4, padB = 4, padR = 2, padL = 2, pw = W - padL - padR, ph = H - padT - padB;
-
-  const now = Date.now();
-  const start = now - rangeSecs * 1000;
-  const spanMs = rangeSecs * 1000;
-  const xOf = (t) => padL + pw * Math.min(1, Math.max(0, (t - start) / spanMs));
-
-  ctx.lineWidth = 1;
-  for (let g = 0; g < 2; g++) {
-    const y = padT + (ph * g) / 1;
-    ctx.strokeStyle = grid;
-    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-  }
-
-  const visible = (series || []).filter((p) => p.t >= start);
-  if (visible.length < 2) {
-    ctx.fillStyle = txt;
-    ctx.font = '10.5px -apple-system, "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('正在积累数据…', W / 2, padT + ph / 2 + 3);
-    return;
-  }
-  const data = bucketize(visible, Math.max(2, Math.floor(pw)));
-  const max = niceCeil(Math.max(...data.map((p) => Math.max(p.up, p.down))) * 1.12);
-  const yOf = (v) => padT + ph * (1 - Math.min(1, v / max));
-  strokeSeries(ctx, data, xOf, yOf, padT, ph);
+  drawNetworkChart(cv, series, true);
 }
 
 // --- 折叠节点列表 -----------------------------------------------------------

@@ -125,9 +125,11 @@ const PANEL_CHROME_SCRIPT: &str = r#"
         border-radius: 50%;
       }
       #${TOOLBAR_ID}.hotaru-macos .hotaru-window-controls svg { display: none; }
-      #${TOOLBAR_ID}.hotaru-macos .hotaru-close { background: #ff5f57; }
-      #${TOOLBAR_ID}.hotaru-macos .hotaru-minimize { background: #febc2e; }
-      #${TOOLBAR_ID}.hotaru-macos .hotaru-maximize { background: #28c840; }
+      /* The group's DOM order is the Windows one (minimise, maximise, close).
+         macOS reads close → minimise → zoom from the left, so reorder there. */
+      #${TOOLBAR_ID}.hotaru-macos .hotaru-close { order: 1; background: #ff5f57; }
+      #${TOOLBAR_ID}.hotaru-macos .hotaru-minimize { order: 2; background: #febc2e; }
+      #${TOOLBAR_ID}.hotaru-macos .hotaru-maximize { order: 3; background: #28c840; }
       #${TOOLBAR_ID}:not(.hotaru-macos) .hotaru-nav { order: 1; }
       #${TOOLBAR_ID}:not(.hotaru-macos) .hotaru-drag-region { order: 2; }
       #${TOOLBAR_ID}:not(.hotaru-macos) .hotaru-window-controls { order: 3; }
@@ -150,7 +152,7 @@ const PANEL_CHROME_SCRIPT: &str = r#"
     const button = (className, label, path) => `<button type="button" class="${className}" aria-label="${label}" title="${label}">${icon(path)}</button>`;
     const toolbar = document.createElement('header');
     toolbar.id = TOOLBAR_ID;
-    toolbar.className = /Mac|iPhone|iPad/.test(navigator.platform) ? 'hotaru-macos' : '';
+    toolbar.className = '__HOTARU_PLATFORM__';
     toolbar.setAttribute('role', 'toolbar');
     toolbar.setAttribute('aria-label', '面板导航');
     toolbar.innerHTML = `
@@ -186,6 +188,21 @@ const PANEL_CHROME_SCRIPT: &str = r#"
   }
 })();
 "#;
+
+/// Fill in the platform class the injected chrome keys its window-control
+/// layout off. Resolved from the build target rather than sniffed in the page:
+/// `navigator.platform` is deprecated and a miss would silently give macOS the
+/// Windows control order.
+fn panel_chrome_script() -> String {
+    PANEL_CHROME_SCRIPT.replace(
+        "__HOTARU_PLATFORM__",
+        if cfg!(target_os = "macos") {
+            "hotaru-macos"
+        } else {
+            ""
+        },
+    )
+}
 
 /// Logical width of the chart popover, and the height range its
 /// content-driven height is clamped to.
@@ -481,7 +498,7 @@ fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
         .title("Hotaru Panel")
         .theme(native_theme(theme))
         .decorations(false)
-        .initialization_script(PANEL_CHROME_SCRIPT)
+        .initialization_script(panel_chrome_script())
         .on_page_load(|window, payload| match payload.event() {
             PageLoadEvent::Started => {
                 window
@@ -960,5 +977,33 @@ mod panel_chrome_tests {
     fn a_fresh_process_has_no_navigation_to_heal() {
         // All timestamps zero (nothing ever loaded): must not look stalled.
         assert!(!panel_needs_healing(true, false, 0, 0, 10_000_000, 0));
+    }
+
+    #[test]
+    fn macos_window_controls_follow_the_traffic_light_order() {
+        // Left to right: close, minimise, zoom — the group's DOM order is the
+        // Windows one, so macOS has to reorder all three.
+        for (class, order) in [
+            (".hotaru-close", 1),
+            (".hotaru-minimize", 2),
+            (".hotaru-maximize", 3),
+        ] {
+            let rule = format!(".hotaru-macos {class} {{ order: {order};");
+            assert!(PANEL_CHROME_SCRIPT.contains(&rule), "missing {rule}");
+        }
+        // Windows keeps the controls on the right, macOS moves them left.
+        assert!(PANEL_CHROME_SCRIPT.contains(".hotaru-macos .hotaru-window-controls { order: 1;"));
+        assert!(PANEL_CHROME_SCRIPT
+            .contains(":not(.hotaru-macos) .hotaru-window-controls { order: 3; }"));
+    }
+
+    #[test]
+    fn platform_class_comes_from_the_build_target() {
+        let script = panel_chrome_script();
+        assert!(!script.contains("__HOTARU_PLATFORM__"));
+        assert_eq!(
+            script.contains("toolbar.className = 'hotaru-macos';"),
+            cfg!(target_os = "macos")
+        );
     }
 }

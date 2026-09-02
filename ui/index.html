@@ -118,6 +118,20 @@
   #toast.show { opacity: 1; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .hint a { color: var(--accent2); }
+  .node-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #nodeStatus { font-size: 12px; color: var(--muted); }
+  #nodeStatus.err { color: var(--danger); }
+  .node-list { margin-top: 12px; display: flex; flex-direction: column; gap: 2px; max-height: 264px; overflow-y: auto; }
+  .node-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; user-select: none; }
+  .node-row:hover { background: var(--field); }
+  .node-row input { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+  .node-row .node-name { flex: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node-tags { display: flex; gap: 4px; flex-wrap: wrap; min-width: 0; }
+  .node-tag {
+    font-size: 11px; padding: 1px 7px; border-radius: 99px; white-space: nowrap;
+    background: var(--button); border: 1px solid var(--border); color: var(--muted);
+  }
+  .node-untagged { font-size: 11px; color: var(--muted); opacity: .65; }
 </style>
 </head>
 <body>
@@ -202,6 +216,16 @@
     <p class="hint">汇总上下行速率的历史曲线。数据仅保存在内存中（固定保留 6 小时），重启应用后清空；曲线时间粒度与刷新间隔一致。</p>
   </section>
 
+  <section>
+    <h2>节点</h2>
+    <div class="node-head">
+      <button class="btn" id="loadNodesBtn" type="button">获取节点列表</button>
+      <span id="nodeStatus" role="status" aria-live="polite"></span>
+    </div>
+    <div class="node-list" id="nodeList"></div>
+    <p class="hint">勾选的节点才会出现在托盘左键弹窗的节点列表里。取消勾选只隐藏列表项：托盘图标、悬浮提示与汇总曲线依旧统计全部节点。标签取自 Komari 的节点设置。</p>
+  </section>
+
   <section id="about">
     <h2>关于</h2>
     <div class="about-head">
@@ -236,6 +260,10 @@ const { invoke } = window.__TAURI__.core;
 const $ = (id) => document.getElementById(id);
 const isMac = /Mac/i.test(navigator.userAgent);
 let currentSettings = {};
+// Node uuids kept out of the popover list, plus the rows to pick from. The
+// hidden set is what gets persisted, so a node added later stays visible.
+let hiddenNodes = new Set();
+let nodeOptions = [];
 
 function applyTheme(theme) {
   const value = ['system', 'light', 'dark'].includes(theme) ? theme : 'system';
@@ -263,6 +291,7 @@ function collect() {
     accept_invalid_certs: $('acceptInvalid').checked,
     chart_range_secs: Number($('chartRange').value) || 900,
     theme: $('theme').value,
+    hidden_nodes: [...hiddenNodes],
   };
 }
 
@@ -279,7 +308,70 @@ function fillSettings(s) {
   if ($('chartRange').selectedIndex === -1) $('chartRange').value = '900';
   $('theme').value = s.theme || 'system';
   if ($('theme').selectedIndex === -1) $('theme').value = 'system';
+  hiddenNodes = new Set(s.hidden_nodes || []);
+  renderNodeList();
   applyTheme($('theme').value);
+}
+
+// Names and tags are backend-controlled, so every cell goes in as text.
+function renderNodeList() {
+  const list = $('nodeList');
+  list.innerHTML = '';
+  if (!nodeOptions.length) {
+    const empty = document.createElement('p');
+    empty.className = 'hint';
+    empty.style.margin = '0';
+    empty.textContent = '尚未获取节点列表。';
+    list.appendChild(empty);
+    return;
+  }
+  for (const node of nodeOptions) {
+    const row = document.createElement('label');
+    row.className = 'node-row';
+
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !hiddenNodes.has(node.uuid);
+    box.addEventListener('change', () => {
+      if (box.checked) hiddenNodes.delete(node.uuid);
+      else hiddenNodes.add(node.uuid);
+    });
+
+    const name = document.createElement('span');
+    name.className = 'node-name';
+    name.textContent = node.name || node.uuid;
+
+    const tags = document.createElement('span');
+    tags.className = 'node-tags';
+    if (node.tags && node.tags.length) {
+      for (const tag of node.tags) {
+        const chip = document.createElement('span');
+        chip.className = 'node-tag';
+        chip.textContent = tag;
+        tags.appendChild(chip);
+      }
+    } else {
+      const none = document.createElement('span');
+      none.className = 'node-untagged';
+      none.textContent = '无标签';
+      tags.appendChild(none);
+    }
+
+    row.append(box, name, tags);
+    list.appendChild(row);
+  }
+}
+
+// Seed the picker from the running monitor's snapshot — local IPC, no backend
+// request — so reopening settings shows what is currently hidden without
+// having to fetch first.
+async function seedNodeList() {
+  try {
+    const snap = await invoke('get_snapshot');
+    if (!snap || !snap.nodes || !snap.nodes.length) return;
+    nodeOptions = snap.nodes.map((n) => ({ uuid: n.uuid, name: n.name, tags: n.tags || [] }));
+    renderNodeList();
+  } catch (_) { /* leave the list empty until fetched */ }
 }
 
 
@@ -304,7 +396,7 @@ async function boot() {
   } catch (e) {
     console.error(e);
   }
-  await Promise.all([refreshAutostart(), loadAppInfo()]);
+  await Promise.all([refreshAutostart(), loadAppInfo(), seedNodeList()]);
 }
 
 $('saveBtn').addEventListener('click', async () => {
@@ -331,6 +423,25 @@ $('testBtn').addEventListener('click', async () => {
     const r = await invoke('test_connection', { settings: collect() });
     out.className = 'ok';
     out.textContent = `${r.message}${r.version ? ' · 版本 ' + r.version : ''}`;
+  } catch (e) {
+    out.className = 'err';
+    out.textContent = String(e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('loadNodesBtn').addEventListener('click', async () => {
+  const btn = $('loadNodesBtn');
+  const out = $('nodeStatus');
+  btn.disabled = true;
+  out.className = '';
+  out.textContent = '正在获取…';
+  try {
+    // Uses the form's current values, so nodes can be picked before saving.
+    nodeOptions = await invoke('list_nodes', { settings: collect() });
+    renderNodeList();
+    out.textContent = `共 ${nodeOptions.length} 个节点`;
   } catch (e) {
     out.className = 'err';
     out.textContent = String(e);

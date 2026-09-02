@@ -12,8 +12,8 @@ fn now_ms() -> u64 {
 fn nodes_json() -> String {
     format!(
         r#"{{"status":"success","data":[
-            {{"uuid":"11111111-1111-1111-1111-111111111111","name":"测试节点A","region":"CN","mem_total":8589934592,"os":"Debian 12"}},
-            {{"uuid":"22222222-2222-2222-2222-222222222222","name":"测试节点B","region":"US","mem_total":4294967296,"os":"Ubuntu 24.04"}}
+            {{"uuid":"11111111-1111-1111-1111-111111111111","name":"测试节点A","region":"CN","mem_total":8589934592,"os":"Debian 12","tags":"香港;BGP"}},
+            {{"uuid":"22222222-2222-2222-2222-222222222222","name":"测试节点B","region":"US","mem_total":4294967296,"os":"Ubuntu 24.04","tags":"洛杉矶"}}
         ]}}"#
     )
 }

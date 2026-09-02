@@ -540,7 +540,16 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
         return;
     }
 
-    let node_count = st.snapshot.read().nodes.len();
+    // Only the rows the popover will actually draw, so the builder's initial
+    // height already accounts for nodes the user hid.
+    let hidden = st.settings.read().hidden_nodes.clone();
+    let node_count = st
+        .snapshot
+        .read()
+        .nodes
+        .iter()
+        .filter(|n| !hidden.contains(&n.uuid))
+        .count();
     let (cw, ch) = chart_logical_size(node_count);
 
     let window = match app.get_webview_window("chart") {

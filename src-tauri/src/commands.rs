@@ -134,6 +134,9 @@ pub fn save_settings(
     state.bump_config_epoch();
     windows::sync_theme(&app, s.theme);
     let _ = app.emit("theme://changed", s.theme);
+    // The popover is hidden rather than reloaded between opens, so it needs a
+    // nudge to pick up things like the hidden-node set while it stays alive.
+    let _ = app.emit("settings://changed", ());
     windows::sync_panel_url(&app, &s.backend_url);
     crate::tray::refresh(&app);
     Ok(s)
@@ -204,6 +207,74 @@ fn downsample(points: &[NetPoint]) -> Vec<NetPoint> {
             }
         })
         .collect()
+}
+
+/// One row of the settings window's node picker.
+#[derive(Serialize)]
+pub struct NodeOption {
+    pub uuid: String,
+    pub name: String,
+    pub tags: Vec<String>,
+}
+
+/// Fetch the node list straight from the backend, using the settings currently
+/// entered in the form rather than the saved ones — so nodes can be picked
+/// before the connection is ever saved. Unlike `get_snapshot` this also lists
+/// nodes that have never reported.
+#[tauri::command]
+pub async fn list_nodes(settings: Settings) -> Result<Vec<NodeOption>, String> {
+    let s = settings.sanitized();
+    let base = normalize_base(&s.backend_url)?;
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(s.accept_invalid_certs)
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.get(format!("{base}/api/nodes"));
+    if !s.api_key.is_empty() {
+        req = req.bearer_auth(&s.api_key);
+    }
+    let resp = req.send().await.map_err(|e| format!("无法连接后端: {e}"))?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(
+            "HTTP 401：站点为私有模式，需要 API Key（管理后台 → 设置 → API Key）".into(),
+        );
+    }
+    if !status.is_success() {
+        return Err(format!("后端返回 HTTP {status}"));
+    }
+    let env: Envelope<Vec<ClientInfo>> = resp
+        .json()
+        .await
+        .map_err(|e| format!("响应不是有效的 Komari API: {e}"))?;
+    if env.status != "success" {
+        return Err(format!(
+            "后端返回错误: {}{}",
+            env.status,
+            env.message.map(|m| format!("（{m}）")).unwrap_or_default()
+        ));
+    }
+    Ok(env
+        .data
+        .unwrap_or_default()
+        .into_iter()
+        .map(|info| NodeOption {
+            name: node_display_name(&info),
+            tags: crate::models::split_tags(&info.tags),
+            uuid: info.uuid,
+        })
+        .collect())
+}
+
+/// Same fallback the monitor uses, so the picker and the popover agree on the
+/// label of a node whose name the backend left empty.
+fn node_display_name(info: &ClientInfo) -> String {
+    if info.name.trim().is_empty() {
+        format!("节点 {}", &info.uuid[..info.uuid.len().min(8)])
+    } else {
+        info.name.clone()
+    }
 }
 
 #[derive(Serialize)]

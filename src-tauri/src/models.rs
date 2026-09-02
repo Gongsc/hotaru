@@ -18,6 +18,11 @@ pub struct Settings {
     pub accept_invalid_certs: bool,
     pub chart_range_secs: u64,
     pub theme: ThemeMode,
+    /// Node uuids kept out of the tray popover's list. The hidden set is stored
+    /// rather than the visible one so a newly added node shows up by default and
+    /// an empty list means "show everything". Display only — the tray icon,
+    /// tooltip and aggregate chart still cover every node.
+    pub hidden_nodes: Vec<String>,
 }
 
 impl Default for Settings {
@@ -34,6 +39,7 @@ impl Default for Settings {
             accept_invalid_certs: false,
             chart_range_secs: CHART_RANGE_DEFAULT,
             theme: ThemeMode::System,
+            hidden_nodes: Vec::new(),
         }
     }
 }
@@ -71,8 +77,23 @@ impl Settings {
         if !CHART_RANGES.contains(&self.chart_range_secs) {
             self.chart_range_secs = CHART_RANGE_DEFAULT;
         }
+        let mut seen = std::collections::HashSet::new();
+        self.hidden_nodes = std::mem::take(&mut self.hidden_nodes)
+            .into_iter()
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty() && seen.insert(u.clone()))
+            .collect();
         self
     }
+}
+
+/// Komari keeps a node's tags in one `;`-separated string.
+pub fn split_tags(raw: &str) -> Vec<String> {
+    raw.split(';')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +110,9 @@ pub struct NodeSnapshot {
     /// e.g. "windows" / "linux" / "darwin".
     #[serde(default)]
     pub os: String,
+    /// Komari node tags, already split out of its `;`-separated string.
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub cpu_usage: f64,
     pub ram_used: u64,
     pub ram_total: u64,
@@ -410,6 +434,9 @@ pub struct ClientInfo {
     pub mem_total: u64,
     #[serde(default, alias = "osAlias", alias = "osName")]
     pub os: String,
+    /// `;`-separated in Komari's API; see [`split_tags`].
+    #[serde(default)]
+    pub tags: String,
     #[serde(default, alias = "trafficLimit")]
     pub traffic_limit: u64,
     #[serde(default, alias = "trafficLimitType")]
@@ -426,6 +453,7 @@ impl Default for ClientInfo {
             region: String::new(),
             mem_total: 0,
             os: String::new(),
+            tags: String::new(),
             traffic_limit: 0,
             traffic_limit_type: String::new(),
             expired_at: None,
@@ -498,6 +526,7 @@ pub fn report_to_snapshot(info: &ClientInfo, online: bool, r: &Report) -> NodeSn
         online,
         region: info.region.clone(),
         os: info.os.clone(),
+        tags: split_tags(&info.tags),
         cpu_usage: r.cpu.as_ref().and_then(|c| c.usage).unwrap_or(0.0),
         ram_used: r.ram.as_ref().and_then(|m| m.used).unwrap_or(0),
         ram_total: r.ram.as_ref().and_then(|m| m.total).unwrap_or(0),
@@ -766,6 +795,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tags_split_on_semicolons() {
+        assert_eq!(split_tags("hk;bgp"), vec!["hk", "bgp"]);
+        // Komari lets the field be blank, ragged or padded.
+        assert_eq!(split_tags(" hk ; ; bgp;"), vec!["hk", "bgp"]);
+        assert!(split_tags("").is_empty());
+        assert!(split_tags(";;").is_empty());
+        // commas are not separators, they stay inside one tag
+        assert_eq!(split_tags("hk,bgp"), vec!["hk,bgp"]);
+    }
+
+    #[test]
+    fn hidden_nodes_are_trimmed_and_deduped_in_order() {
+        let mut s = Settings::default();
+        assert!(s.hidden_nodes.is_empty(), "everything visible by default");
+        s.hidden_nodes = vec![
+            " b ".into(),
+            "a".into(),
+            "b".into(),
+            String::new(),
+            "   ".into(),
+            "a".into(),
+        ];
+        assert_eq!(s.sanitized().hidden_nodes, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn hidden_nodes_default_for_settings_saved_before_the_field_existed() {
+        let s: Settings = serde_json::from_str(r#"{"backend_url":"https://x.example"}"#).unwrap();
+        assert!(s.hidden_nodes.is_empty());
+    }
+
     impl NodeSnapshot {
         fn test_default() -> Self {
             Self {
@@ -773,6 +834,7 @@ mod tests {
                 name: "n".into(),
                 region: String::new(),
                 os: String::new(),
+                tags: Vec::new(),
                 online: true,
                 cpu_usage: 0.0,
                 ram_used: 0,

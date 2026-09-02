@@ -125,7 +125,13 @@
   .nrow .os { flex: none; width: 13px; height: 13px; color: var(--ink-2); display: flex; align-items: center; justify-content: center; }
   .nrow .os svg { display: block; width: 13px; height: 13px; }
   .nrow .os img { display: block; width: 13px; height: 13px; }
-  .nrow .name { flex: 1; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nrow .name { flex: 1; min-width: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nrow .tags { flex: none; display: flex; gap: 4px; max-width: 45%; overflow: hidden; }
+  .nrow .ntag {
+    font-size: 9px; line-height: 13px; padding: 0 5px; border-radius: 99px;
+    background: var(--chip); color: var(--ink-2); white-space: nowrap;
+    max-width: 80px; overflow: hidden; text-overflow: ellipsis;
+  }
   .nrow .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--down); }
   .nrow .dot.off { background: var(--off); }
   .nrow .chev { flex: none; width: 14px; text-align: center; font-size: 10px; color: var(--ink-2);
@@ -248,6 +254,7 @@ let points = [];                 // aggregate [{t, up, down}]
 let nodeSeries = new Map();      // uuid -> [{t, up, down, online}]
 let nodeMeta = new Map();        // uuid -> {name, online, cpu, memPct, uptime, region, os}
 let expandedUuid = null;         // accordion: which node card is open
+let hiddenNodes = new Set();     // uuids the user unchecked in 设置 → 节点
 let lastDraw = 0;
 let backendOk = true;
 let onlineCount = null;
@@ -675,8 +682,16 @@ function drawMini(cv, series) {
 
 let nodesKey = null;
 
+// 未勾选的节点只是不进列表:图标、悬浮提示与汇总曲线仍按全部节点统计。
+function visibleUuids() {
+  return [...nodeMeta.keys()].filter((uuid) => !hiddenNodes.has(uuid));
+}
+
 function nodesKeyOf() {
-  return [...nodeMeta.keys()].join(',') + '|' + expandedUuid;
+  // 标签也进 key,后端改了标签下次刷新就能重建出来。
+  return visibleUuids()
+    .map((uuid) => uuid + ':' + (nodeMeta.get(uuid).tags || []).join('|'))
+    .join(',') + '|' + expandedUuid;
 }
 
 function syncNodes() {
@@ -694,12 +709,12 @@ function buildNodes() {
   const container = document.getElementById('nodes');
   container.innerHTML = '';
 
-  const uuids = [...nodeMeta.keys()];
+  const uuids = visibleUuids();
   if (!uuids.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
     empty.style.cssText = 'color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;';
-    empty.textContent = '暂无节点';
+    empty.textContent = nodeMeta.size ? '节点已全部隐藏' : '暂无节点';
     container.appendChild(empty);
     fitHeight();
     return;
@@ -716,7 +731,15 @@ function buildNodes() {
     row.className = 'nrow';
     row.innerHTML = '<span class="flag"></span><span class="os"></span>' +
       '<span class="dot' + (meta.online ? '' : ' off') + '"></span>' +
-      '<span class="name"></span><span class="chev">▶</span>';
+      '<span class="name"></span><span class="tags"></span><span class="chev">▶</span>';
+    // 标签来自后端,只用 textContent 写入
+    const tagsEl = row.querySelector('.tags');
+    for (const tag of meta.tags || []) {
+      const chip = document.createElement('span');
+      chip.className = 'ntag';
+      chip.textContent = tag;
+      tagsEl.appendChild(chip);
+    }
     const code = countryCodeOf(meta.region);
     const flagEl = row.querySelector('.flag');
     if (code) {
@@ -860,7 +883,7 @@ function renderPingGrid(uuid, refs) {
 function patchNodes() {
   const container = document.getElementById('nodes');
   const cardEls = container.querySelectorAll('.card');
-  const uuids = [...nodeMeta.keys()];
+  const uuids = visibleUuids();
   cardEls.forEach((card, idx) => {
     try {
       const uuid = uuids[idx];
@@ -916,7 +939,7 @@ function patchNodes() {
 
 function drawMinis() {
   const container = document.getElementById('nodes');
-  const uuids = [...nodeMeta.keys()];
+  const uuids = visibleUuids();
   container.querySelectorAll('.card.open').forEach((card) => {
     const idx = [...container.querySelectorAll('.card')].indexOf(card);
     const uuid = uuids[idx];
@@ -980,6 +1003,7 @@ function ingestSnap(snap) {
         uptime: n.uptime_secs,
         region: n.region || '',
         os: n.os || '',
+        tags: n.tags || [],
       });
       totalUp += n.total_up; totalDown += n.total_down;
       let s = nodeSeries.get(n.uuid);
@@ -1011,6 +1035,9 @@ async function refresh() {
     applyTheme(s.theme || 'system');
     cpuWarnPct = s.cpu_warn_pct || 80;
     memWarnPct = s.mem_warn_pct || 85;
+    hiddenNodes = new Set(s.hidden_nodes || []);
+    // 展开的节点被隐藏后就没有对应的卡片了,顺手收起
+    if (expandedUuid && hiddenNodes.has(expandedUuid)) expandedUuid = null;
   } catch (e) { /* keep current values */ }
   // Synchronize from the Rust process's in-memory snapshot. This is local IPC,
   // not a new backend request, and preserves the existing DOM when node IDs
@@ -1085,6 +1112,8 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
 (async () => {
   await listen('monitor://update', (e) => ingestSnap(e.payload));
   await listen('theme://changed', (e) => applyTheme(e.payload));
+  // 弹窗在两次打开之间只是隐藏,保存设置后需要主动重取(隐藏节点等)
+  await listen('settings://changed', () => { refresh(); });
   // Refresh from process memory on focus; the page and node DOM stay alive.
   win.listen('tauri://focus', refresh);
   await restorePin();

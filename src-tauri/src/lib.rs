@@ -104,6 +104,7 @@ pub fn run() {
             commands::get_snapshot,
             commands::get_net_history,
             commands::test_connection,
+            commands::list_nodes,
             commands::get_autostart,
             commands::set_autostart,
             commands::open_panel_cmd,

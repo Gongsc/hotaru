@@ -58,6 +58,11 @@ pub struct AppState {
     pub chart_hidden_at: Mutex<Option<std::time::Instant>>,
     /// Chart popover "pinned" (keep open on blur, keep dragged position).
     pub chart_pinned: std::sync::atomic::AtomicBool,
+    /// Whether the popover was last placed below the tray icon (top edge
+    /// anchored) rather than above it (bottom edge anchored). Resizes grow
+    /// away from that edge so an expanded node card cannot push the popover
+    /// off-screen.
+    pub chart_below: std::sync::atomic::AtomicBool,
     /// Epoch ms of the panel webview's last finished page load (watchdog).
     pub panel_load_ms: std::sync::atomic::AtomicU64,
     pub panel_load_started_ms: std::sync::atomic::AtomicU64,
@@ -85,6 +90,9 @@ pub fn init(app: &AppHandle) -> AppState {
         loaded_panel_url: Mutex::new(None),
         chart_hidden_at: Mutex::new(None),
         chart_pinned: std::sync::atomic::AtomicBool::new(false),
+        // macOS hangs the popover under the menu bar, Windows above the
+        // taskbar. Overwritten the first time the popover is positioned.
+        chart_below: std::sync::atomic::AtomicBool::new(cfg!(target_os = "macos")),
         panel_load_ms: std::sync::atomic::AtomicU64::new(0),
         panel_load_started_ms: std::sync::atomic::AtomicU64::new(0),
         panel_reload_ms: std::sync::atomic::AtomicU64::new(0),

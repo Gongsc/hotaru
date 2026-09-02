@@ -282,12 +282,22 @@ pub fn set_autostart(app: AppHandle, enable: bool) -> Result<(), String> {
     result.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+// `(async)` is load-bearing on both window-opening commands: a plain
+// `#[tauri::command]` body runs inline on the main thread, inside the calling
+// webview's WebView2 IPC callback. `run_on_main_thread` then sees the main
+// thread and also runs inline, so the window is built from within that
+// callback — and building a webview pumps a nested message loop
+// (`webview2_com::wait_with_pump`), which WebView2 does not allow while it is
+// dispatching an event. The controller never finishes initializing (white
+// window) and the pump never returns (the whole app hangs). Running the
+// command off the main thread makes `run_on_main_thread` queue the work on the
+// event loop proxy instead, so creation happens between callbacks.
+#[tauri::command(async)]
 pub fn open_panel_cmd(app: AppHandle) {
     windows::open_panel(&app);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_settings_cmd(app: AppHandle) {
     windows::open_settings(&app);
 }
@@ -304,6 +314,14 @@ pub fn get_chart_pinned(state: State<'_, AppState>) -> bool {
     state
         .chart_pinned
         .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Resize the popover once the page knows its content height. Rust owns the
+/// clamp and the reposition: it knows which edge is anchored to the tray icon
+/// and grows the window away from it.
+#[tauri::command]
+pub fn resize_chart(app: AppHandle, height: f64) -> f64 {
+    windows::resize_chart(&app, height)
 }
 
 #[derive(Serialize)]

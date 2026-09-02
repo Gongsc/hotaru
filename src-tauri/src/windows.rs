@@ -1,16 +1,27 @@
-use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 #[cfg(target_os = "macos")]
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 
 use crate::models::{normalize_base, ThemeMode};
 use crate::state::AppState;
 
+/// Logical width of the chart popover, and the height range its
+/// content-driven height is clamped to.
+const CHART_W: f64 = 320.0;
+const CHART_MIN_H: f64 = 300.0;
+const CHART_MAX_H: f64 = 900.0;
+/// Vertical room left free so the popover never spans the whole screen.
+const CHART_SCREEN_MARGIN: f64 = 80.0;
+
 /// Logical size of the chart popover. Height depends on the node count so
 /// the builder's initial size already matches the content (the page still
 /// fine-tunes it from JS).
 fn chart_logical_size(node_count: usize) -> (f64, f64) {
     let base = 224.0 + node_count as f64 * 32.0 + 46.0;
-    (320.0, base.clamp(300.0, 900.0))
+    (CHART_W, base.clamp(CHART_MIN_H, CHART_MAX_H))
 }
 /// Ignore tray clicks that arrive right after the popover auto-hid on blur,
 /// so the same click does not instantly reopen it (toggle semantics).
@@ -150,9 +161,11 @@ pub fn spawn_panel_watchdog_loop(app: &AppHandle) {
 /// Open (or focus) the main window showing the Komari dashboard at the
 /// configured backend URL. Falls back to settings when unconfigured.
 ///
-/// Always dispatches to the main thread: WebView2 controllers must be
-/// created on an STA thread, and command handlers run on MTA threads —
-/// creating the window there silently produces a dead (white) webview.
+/// Always dispatches to the main thread: WebView2 controllers must be created
+/// on the UI thread. Note that `run_on_main_thread` only *queues* the work
+/// when the caller is off the main thread — callers reached from a webview must
+/// therefore be `#[tauri::command(async)]`, or the window ends up being built
+/// inside a WebView2 callback and hangs the process (see `commands.rs`).
 pub fn open_panel(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -351,10 +364,88 @@ fn position_chart(
     // Icons near the top of the screen (macOS menu bar) pop below; icons near
     // the bottom (Windows taskbar) pop above.
     let below = icon_bottom < my + mh / 2.0;
+    app.state::<AppState>()
+        .chart_below
+        .store(below, std::sync::atomic::Ordering::Relaxed);
     let y = if below { icon_bottom + gap } else { icon_top - gap - h };
     let y = y.clamp(my, (my + mh - h).max(my));
 
     let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
+}
+
+/// Clamp a requested logical popover height to the height range and, when the
+/// monitor is known, to its logical height minus [`CHART_SCREEN_MARGIN`].
+fn clamp_chart_h(logical_h: f64, monitor_logical_h: Option<f64>) -> f64 {
+    let mut max_h = CHART_MAX_H;
+    if let Some(mh) = monitor_logical_h {
+        max_h = max_h.min(mh - CHART_SCREEN_MARGIN);
+    }
+    logical_h.clamp(CHART_MIN_H, CHART_MIN_H.max(max_h))
+}
+
+/// New top edge (physical px) for a popover resized from `cur_h` to
+/// `target_h`. A `below` popover hangs off the menu bar and keeps its top
+/// edge; the others sit above the taskbar and keep their bottom edge, so they
+/// grow upwards. `monitor` is the containing monitor's `(top, height)`.
+fn anchored_y(
+    below: bool,
+    cur_top: f64,
+    cur_h: f64,
+    target_h: f64,
+    monitor: Option<(f64, f64)>,
+) -> f64 {
+    let y = if below { cur_top } else { cur_top + cur_h - target_h };
+    match monitor {
+        Some((my, mh)) => y.clamp(my, (my + mh - target_h).max(my)),
+        None => y,
+    }
+}
+
+/// Resize the popover to `logical_h`, growing away from the edge anchored to
+/// the tray icon: hanging under the menu bar it keeps its top edge and extends
+/// downwards, sitting above the taskbar it keeps its bottom edge and extends
+/// upwards. Returns the logical height actually applied after clamping to the
+/// popover's monitor. A plain `set_size` always grows downwards, which pushes
+/// an expanded node card off the bottom of the screen.
+pub fn resize_chart(app: &AppHandle, logical_h: f64) -> f64 {
+    let Some(window) = app.get_webview_window("chart") else { return logical_h };
+    let Ok(pos) = window.outer_position() else { return logical_h };
+    let Ok(size) = window.inner_size() else { return logical_h };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let cur_h = size.height as f64;
+    let below = app
+        .state::<AppState>()
+        .chart_below
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    // Probe the monitor at the anchored edge: that edge sits next to the tray
+    // icon, so it is on-screen even when the opposite edge already overflowed.
+    let anchor_y = if below { pos.y as f64 } else { pos.y as f64 + cur_h - 1.0 };
+    let center_x = pos.x as f64 + size.width as f64 / 2.0;
+    let monitor = monitor_containing(app, center_x, anchor_y);
+    let bounds = monitor
+        .as_ref()
+        .map(|m| (m.position().y as f64, m.size().height as f64));
+    let monitor_logical_h = monitor
+        .as_ref()
+        .map(|m| m.size().height as f64 / m.scale_factor());
+
+    let applied = clamp_chart_h(logical_h, monitor_logical_h);
+    let target_h = (applied * scale).round().max(1.0);
+    let y = anchored_y(below, pos.y as f64, cur_h, target_h, bounds);
+
+    let new_pos = PhysicalPosition::new(pos.x, y as i32);
+    let new_size = PhysicalSize::new(size.width, target_h as u32);
+    // Move before growing, shrink before moving: either order leaves the
+    // window briefly overhanging the anchored screen edge otherwise.
+    if target_h > cur_h {
+        let _ = window.set_position(new_pos);
+        let _ = window.set_size(new_size);
+    } else {
+        let _ = window.set_size(new_size);
+        let _ = window.set_position(new_pos);
+    }
+    applied
 }
 
 fn monitor_containing(
@@ -401,5 +492,67 @@ fn open_settings_on_main(app: &AppHandle) {
             .min_inner_size(480.0, 600.0)
             .build();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 1080p monitor at the virtual-desktop origin: `(top, height)`.
+    const SCREEN: Option<(f64, f64)> = Some((0.0, 1080.0));
+
+    #[test]
+    fn grows_downwards_when_anchored_below_the_icon() {
+        // Menu-bar popover: the top edge stays put, extra height goes down.
+        assert_eq!(anchored_y(true, 30.0, 300.0, 600.0, SCREEN), 30.0);
+        assert_eq!(anchored_y(true, 30.0, 600.0, 300.0, SCREEN), 30.0);
+    }
+
+    #[test]
+    fn grows_upwards_when_anchored_above_the_icon() {
+        // Taskbar popover: the bottom edge stays at 1026, so the top moves up
+        // instead of the bottom sliding off the screen.
+        assert_eq!(anchored_y(false, 726.0, 300.0, 600.0, SCREEN), 426.0);
+        assert_eq!(anchored_y(false, 426.0, 600.0, 300.0, SCREEN), 726.0);
+    }
+
+    #[test]
+    fn keeps_the_popover_inside_its_monitor() {
+        // Taller than the room above the anchored bottom edge: parked at the
+        // monitor's top edge instead of being pushed past it.
+        assert_eq!(anchored_y(false, 1000.0, 26.0, 900.0, SCREEN), 126.0);
+        assert_eq!(anchored_y(false, 300.0, 26.0, 900.0, SCREEN), 0.0);
+        // Below the menu bar with more height than the screen has left.
+        assert_eq!(anchored_y(true, 900.0, 100.0, 600.0, SCREEN), 480.0);
+        // A monitor shorter than the popover cannot overflow upwards either.
+        assert_eq!(anchored_y(false, 100.0, 100.0, 900.0, Some((0.0, 800.0))), 0.0);
+    }
+
+    #[test]
+    fn secondary_monitor_bounds_use_its_own_origin() {
+        let above = Some((-1200.0, 1200.0));
+        assert_eq!(anchored_y(false, -300.0, 100.0, 900.0, above), -1100.0);
+        assert_eq!(anchored_y(false, -1150.0, 50.0, 900.0, above), -1200.0);
+    }
+
+    #[test]
+    fn height_clamp_respects_the_monitor_in_logical_pixels() {
+        assert_eq!(clamp_chart_h(500.0, Some(1080.0)), 500.0);
+        assert_eq!(clamp_chart_h(200.0, Some(1080.0)), CHART_MIN_H);
+        assert_eq!(clamp_chart_h(2000.0, Some(1080.0)), CHART_MAX_H);
+        // 1080 physical at 150% scaling is 720 logical: the cap has to follow
+        // the logical height or the popover ends up taller than the screen.
+        assert_eq!(clamp_chart_h(700.0, Some(720.0)), 640.0);
+        // Screens too short even for the minimum height still get it.
+        assert_eq!(clamp_chart_h(700.0, Some(300.0)), CHART_MIN_H);
+        assert_eq!(clamp_chart_h(2000.0, None), CHART_MAX_H);
+    }
+
+    #[test]
+    fn initial_size_tracks_the_node_count() {
+        assert_eq!(chart_logical_size(0), (CHART_W, CHART_MIN_H));
+        assert_eq!(chart_logical_size(4), (CHART_W, 398.0));
+        assert_eq!(chart_logical_size(100), (CHART_W, CHART_MAX_H));
     }
 }

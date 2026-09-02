@@ -256,6 +256,42 @@ pub fn recreate_panel(app: &AppHandle) {
 /// If the panel's external dashboard did not finish loading within this
 /// window of time, reload it once (white-screen self-healing).
 const PANEL_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// A navigation that still has not finished after this long looks wedged.
+const PANEL_STALL_MS: u64 = 30_000;
+/// Minimum gap between two automatic heal attempts.
+const PANEL_HEAL_COOLDOWN_MS: u64 = 60_000;
+
+/// Whether the watchdog armed for one navigation should reload the panel.
+/// `loaded_now == loaded_before` means that navigation never reported
+/// `Finished`. A minimized or hidden panel is exempt: WebView2 throttles
+/// background windows, so an unfinished load there is expected rather than
+/// broken, and the user is not looking at a white page anyway.
+fn panel_load_timed_out(
+    visible: bool,
+    minimized: bool,
+    loaded_before: u64,
+    loaded_now: u64,
+) -> bool {
+    visible && !minimized && loaded_now <= loaded_before
+}
+
+/// Whether the periodic watchdog should rebuild a wedged panel. Same exemption
+/// as above, and healing a background window would additionally yank it back in
+/// front of the user.
+fn panel_needs_healing(
+    visible: bool,
+    minimized: bool,
+    started_ms: u64,
+    loaded_ms: u64,
+    now_ms: u64,
+    last_heal_ms: u64,
+) -> bool {
+    visible
+        && !minimized
+        && started_ms > loaded_ms
+        && now_ms.saturating_sub(started_ms) > PANEL_STALL_MS
+        && now_ms.saturating_sub(last_heal_ms) > PANEL_HEAL_COOLDOWN_MS
+}
 
 fn now_ms_u64() -> u64 {
     std::time::SystemTime::now()
@@ -274,9 +310,12 @@ pub fn mark_panel_loaded(app: &AppHandle) {
         .store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Spawn a watchdog after panel creation: if the page hasn't shown itself
-/// within 6s (load-finished triggers the show), display it anyway so the
-/// window can't stay invisible; if it loaded but hung, recreate at 20s.
+/// Spawn a watchdog for one pending navigation: if the page hasn't shown
+/// itself within 6s (load-finished triggers the show), display it anyway so the
+/// window can't stay invisible; if that navigation never finished, reload at
+/// 20s. Only arm this where a navigation is actually pending — on a panel that
+/// is merely being re-shown there is nothing to wait for, and the 20s reload
+/// would fire on every open.
 pub fn spawn_panel_watchdog(app: &AppHandle) {
     let handle = app.clone();
     let st = handle.state::<AppState>();
@@ -292,7 +331,9 @@ pub fn spawn_panel_watchdog(app: &AppHandle) {
         if st.panel_epoch.load(std::sync::atomic::Ordering::Relaxed) != epoch {
             return; // 用户已关闭/重新打开面板,该看门狗作废
         }
-        if !window.is_visible().unwrap_or(true) {
+        // A minimized window is invisible on macOS but deliberately so — never
+        // un-minimize it here, that is the user's state to keep.
+        if !window.is_visible().unwrap_or(true) && !window.is_minimized().unwrap_or(false) {
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -304,49 +345,49 @@ pub fn spawn_panel_watchdog(app: &AppHandle) {
         if st.panel_epoch.load(std::sync::atomic::Ordering::Relaxed) != epoch {
             return;
         }
-        let loaded = st.panel_load_ms.load(std::sync::atomic::Ordering::Relaxed);
-        if loaded > before || !window.is_visible().unwrap_or(false) {
-            return;
+        if panel_load_timed_out(
+            window.is_visible().unwrap_or(false),
+            window.is_minimized().unwrap_or(false),
+            before,
+            st.panel_load_ms.load(std::sync::atomic::Ordering::Relaxed),
+        ) {
+            let _ = window.eval("location.reload()");
         }
-        let _ = window.eval("location.reload()");
     });
 }
 
-/// Periodic panel health check: while the panel is visible, a navigation
-/// that started but never finished within 30s triggers one reload (with a
-/// per-reload cooldown). Runs forever from a background thread.
+/// Periodic panel health check: while the panel is on screen, a navigation
+/// that started but never finished within 30s triggers one rebuild (with a
+/// per-attempt cooldown). Runs forever from a background thread.
 pub fn panel_watchdog_tick(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    if !window.is_visible().unwrap_or(false) {
-        return;
-    }
     let st = app.state::<AppState>();
     let now = now_ms_u64();
-    let started = st
-        .panel_load_started_ms
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let loaded = st.panel_load_ms.load(std::sync::atomic::Ordering::Relaxed);
-    let last_reload = st
-        .panel_reload_ms
-        .load(std::sync::atomic::Ordering::Relaxed);
-    if started > loaded
-        && now.saturating_sub(started) > 30_000
-        && now.saturating_sub(last_reload) > 60_000
-    {
-        // 熔断:连续重建 3 次仍未加载成功就停止,避免无限循环
-        let streak = st
-            .panel_recreate_streak
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if streak >= 3 {
-            return;
-        }
+    if !panel_needs_healing(
+        window.is_visible().unwrap_or(false),
+        window.is_minimized().unwrap_or(false),
+        st.panel_load_started_ms
+            .load(std::sync::atomic::Ordering::Relaxed),
+        st.panel_load_ms.load(std::sync::atomic::Ordering::Relaxed),
+        now,
         st.panel_reload_ms
-            .store(now, std::sync::atomic::Ordering::Relaxed);
-        // 页面可能已挂死,eval 的 reload 未必能执行——直接重建面板 webview。
-        recreate_panel(app);
+            .load(std::sync::atomic::Ordering::Relaxed),
+    ) {
+        return;
     }
+    // 熔断:连续重建 3 次仍未加载成功就停止,避免无限循环
+    let streak = st
+        .panel_recreate_streak
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if streak >= 3 {
+        return;
+    }
+    st.panel_reload_ms
+        .store(now, std::sync::atomic::Ordering::Relaxed);
+    // 页面可能已挂死,eval 的 reload 未必能执行——直接重建面板 webview。
+    recreate_panel(app);
 }
 
 /// Start the periodic watchdog thread (once, from setup).
@@ -386,6 +427,7 @@ fn open_panel_on_main(app: &AppHandle) {
     };
     match app.get_webview_window("main") {
         Some(window) => {
+            let mut navigated = false;
             {
                 let st = app.state::<AppState>();
                 let loaded = st.loaded_panel_url.lock().clone();
@@ -395,12 +437,18 @@ fn open_panel_on_main(app: &AppHandle) {
                     let js =
                         serde_json::to_string(&base).unwrap_or_else(|_| "\"about:blank\"".into());
                     let _ = window.eval(format!("window.location.replace({js})"));
+                    navigated = true;
                 }
             }
             let _ = window.show();
             let _ = window.unminimize();
             let _ = window.set_focus();
-            spawn_panel_watchdog(app);
+            // Only a fresh navigation has something for the watchdog to wait
+            // on. Arming it when merely re-showing an already-loaded panel made
+            // the page reload itself 20s after every open.
+            if navigated {
+                spawn_panel_watchdog(app);
+            }
         }
         None => {
             let _ = create_panel(app, &base);
@@ -860,5 +908,57 @@ mod panel_chrome_tests {
         assert!(should_retry_settings_load(0));
         assert!(should_retry_settings_load(1));
         assert!(!should_retry_settings_load(2));
+    }
+
+    #[test]
+    fn reload_only_when_the_watched_navigation_never_finished() {
+        // Armed at T=1000, nothing finished since: the page is stuck.
+        assert!(panel_load_timed_out(true, false, 1000, 1000));
+        // A load finished after the watchdog was armed.
+        assert!(!panel_load_timed_out(true, false, 1000, 1200));
+        // Hidden or minimized panels are left alone.
+        assert!(!panel_load_timed_out(false, false, 1000, 1000));
+        assert!(!panel_load_timed_out(true, true, 1000, 1000));
+    }
+
+    #[test]
+    fn healing_needs_a_stalled_navigation_on_a_foreground_panel() {
+        // Epoch-milliseconds scale, so "never healed" (0) clears the cooldown.
+        const START: u64 = 1_700_000_000_000;
+        const LOADED: u64 = START - 4_000;
+        let now = START + PANEL_STALL_MS + 1;
+        assert!(panel_needs_healing(true, false, START, LOADED, now, 0));
+        // The navigation did finish.
+        assert!(!panel_needs_healing(true, false, START, START + 1, now, 0));
+        // Not stalled long enough yet.
+        assert!(!panel_needs_healing(
+            true,
+            false,
+            START,
+            LOADED,
+            START + PANEL_STALL_MS,
+            0
+        ));
+        // Still inside the cooldown after a previous attempt.
+        assert!(!panel_needs_healing(true, false, START, LOADED, now, now - 1));
+        assert!(panel_needs_healing(
+            true,
+            false,
+            START,
+            LOADED,
+            now,
+            now - PANEL_HEAL_COOLDOWN_MS - 1
+        ));
+        // Never rebuild a panel the user cannot see: a minimized WebView2 is
+        // throttled, so an unfinished load there is not a wedged page — and the
+        // rebuilt window would pop back in front of the user.
+        assert!(!panel_needs_healing(true, true, START, LOADED, now, 0));
+        assert!(!panel_needs_healing(false, false, START, LOADED, now, 0));
+    }
+
+    #[test]
+    fn a_fresh_process_has_no_navigation_to_heal() {
+        // All timestamps zero (nothing ever loaded): must not look stalled.
+        assert!(!panel_needs_healing(true, false, 0, 0, 10_000_000, 0));
     }
 }

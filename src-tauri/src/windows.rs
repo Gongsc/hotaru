@@ -204,13 +204,14 @@ fn panel_chrome_script() -> String {
     )
 }
 
-/// Logical width of the chart popover, and the height range its
-/// content-driven height is clamped to.
+/// Logical width of the chart popover, and the height bounds for its initial
+/// size. Once the page reports its content height the screen's free space is
+/// the real ceiling — [`CHART_MAX_H`] then only covers an unknown monitor.
 const CHART_W: f64 = 320.0;
 const CHART_MIN_H: f64 = 300.0;
 const CHART_MAX_H: f64 = 900.0;
-/// Vertical room left free so the popover never spans the whole screen.
-const CHART_SCREEN_MARGIN: f64 = 80.0;
+/// Vertical room left free so the popover never touches the screen edge.
+const CHART_SCREEN_MARGIN: f64 = 12.0;
 
 /// Logical size of the chart popover. Height depends on the node count so
 /// the builder's initial size already matches the content (the page still
@@ -617,6 +618,7 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
             else {
                 return;
             };
+            round_window_corners(&window);
             position_chart(app, &window, center_x, iy, iy + ih, ch);
             window
         }
@@ -625,6 +627,39 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
     let _ = window.show();
     let _ = window.set_focus();
 }
+
+/// Give the popover rounded corners on Windows, matching the macOS popover.
+///
+/// The window cannot simply use a rounded CSS panel there: WebView2 paints an
+/// opaque surface, so the corners outside the radius would show the square
+/// window behind them (which is why the page keeps `border-radius: 0` under
+/// `.windows-opaque`). Asking DWM to round the frame instead makes the OS clip
+/// and anti-alias the window itself, at the system corner radius. Left as-is on
+/// Windows 10, where the attribute is simply not supported.
+#[cfg(target_os = "windows")]
+fn round_window_corners(window: &WebviewWindow) {
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_ROUND: i32 = 2;
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const i32, size: u32) -> i32;
+    }
+    let Ok(hwnd) = window.hwnd() else { return };
+    let pref = DWMWCP_ROUND;
+    // SAFETY: the handle is alive for the duration of the call and DWM copies
+    // the value out of `pref`. An unsupported attribute only returns an error.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0 as isize,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &pref,
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn round_window_corners(_window: &WebviewWindow) {}
 
 /// Close the chart popover from the Rust side (blur timeout / close
 /// request). Hiding keeps the page and its cached node state alive.
@@ -667,14 +702,31 @@ fn position_chart(
     let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
 }
 
-/// Clamp a requested logical popover height to the height range and, when the
-/// monitor is known, to its logical height minus [`CHART_SCREEN_MARGIN`].
-fn clamp_chart_h(logical_h: f64, monitor_logical_h: Option<f64>) -> f64 {
-    let mut max_h = CHART_MAX_H;
-    if let Some(mh) = monitor_logical_h {
-        max_h = max_h.min(mh - CHART_SCREEN_MARGIN);
-    }
+/// Clamp a requested logical popover height to what the screen actually leaves
+/// free on the anchored side, minus [`CHART_SCREEN_MARGIN`]. Anything past that
+/// is reached by scrolling the node list instead of by a taller window.
+/// [`CHART_MAX_H`] only stands in when the monitor could not be determined.
+fn clamp_chart_h(logical_h: f64, available_logical_h: Option<f64>) -> f64 {
+    let max_h = match available_logical_h {
+        Some(avail) => avail - CHART_SCREEN_MARGIN,
+        None => CHART_MAX_H,
+    };
     logical_h.clamp(CHART_MIN_H, CHART_MIN_H.max(max_h))
+}
+
+/// Physical pixels the popover can grow into: from the edge pinned to the tray
+/// icon to the far edge of the screen's work area. `work` is that area's
+/// `(top, height)`.
+fn available_room(below: bool, cur_top: f64, cur_h: f64, work: (f64, f64)) -> f64 {
+    let (wy, wh) = work;
+    if below {
+        // Top edge is pinned under the tray icon; grow down to the work area's
+        // bottom.
+        (wy + wh - cur_top).max(0.0)
+    } else {
+        // Bottom edge is pinned above the tray icon; grow up to its top.
+        (cur_top + cur_h - wy).max(0.0)
+    }
 }
 
 /// New top edge (physical px) for a popover resized from `cur_h` to
@@ -731,16 +783,17 @@ pub fn resize_chart(app: &AppHandle, logical_h: f64) -> f64 {
     };
     let center_x = pos.x as f64 + size.width as f64 / 2.0;
     let monitor = monitor_containing(app, center_x, anchor_y);
-    let bounds = monitor
-        .as_ref()
-        .map(|m| (m.position().y as f64, m.size().height as f64));
-    let monitor_logical_h = monitor
-        .as_ref()
-        .map(|m| m.size().height as f64 / m.scale_factor());
+    // The work area excludes the taskbar / Dock, so the popover grows into the
+    // space the shell actually leaves free.
+    let work = monitor.as_ref().map(|m| {
+        let area = m.work_area();
+        (area.position.y as f64, area.size.height as f64)
+    });
+    let available = work.map(|w| available_room(below, pos.y as f64, cur_h, w) / scale);
 
-    let applied = clamp_chart_h(logical_h, monitor_logical_h);
+    let applied = clamp_chart_h(logical_h, available);
     let target_h = (applied * scale).round().max(1.0);
-    let y = anchored_y(below, pos.y as f64, cur_h, target_h, bounds);
+    let y = anchored_y(below, pos.y as f64, cur_h, target_h, work);
 
     let new_pos = PhysicalPosition::new(pos.x, y as i32);
     let new_size = PhysicalSize::new(size.width, target_h as u32);
@@ -885,13 +938,33 @@ mod panel_chrome_tests {
     }
 
     #[test]
-    fn height_clamp_respects_the_monitor_in_logical_pixels() {
-        assert_eq!(clamp_chart_h(500.0, Some(1080.0)), 500.0);
-        assert_eq!(clamp_chart_h(200.0, Some(1080.0)), CHART_MIN_H);
-        assert_eq!(clamp_chart_h(2000.0, Some(1080.0)), CHART_MAX_H);
-        assert_eq!(clamp_chart_h(700.0, Some(720.0)), 640.0);
-        assert_eq!(clamp_chart_h(700.0, Some(300.0)), CHART_MIN_H);
+    fn height_is_capped_by_the_free_space_not_the_whole_screen() {
+        // Plenty of room: the request goes through untouched.
+        assert_eq!(clamp_chart_h(500.0, Some(1000.0)), 500.0);
+        assert_eq!(clamp_chart_h(200.0, Some(1000.0)), CHART_MIN_H);
+        // Tall screens may show a tall popover; the old flat 900px ceiling hid
+        // nodes that had room to be drawn.
+        assert_eq!(clamp_chart_h(1600.0, Some(2000.0)), 1600.0);
+        // Past the free space the list scrolls instead of the window growing.
+        assert_eq!(clamp_chart_h(900.0, Some(700.0)), 700.0 - CHART_SCREEN_MARGIN);
+        // Screens too short even for the minimum height still get the minimum.
+        assert_eq!(clamp_chart_h(700.0, Some(200.0)), CHART_MIN_H);
+        // Unknown monitor falls back to the fixed ceiling.
         assert_eq!(clamp_chart_h(2000.0, None), CHART_MAX_H);
+    }
+
+    #[test]
+    fn free_space_is_measured_from_the_anchored_edge() {
+        // 1080-tall screen, 48px taskbar at the bottom.
+        let work = (0.0, 1032.0);
+        // Bottom edge pinned at 1026 (300 tall, top at 726): it may grow all the
+        // way up to the top of the work area.
+        assert_eq!(available_room(false, 726.0, 300.0, work), 1026.0);
+        // Top edge pinned just under a 25px menu bar: down to the work bottom.
+        assert_eq!(available_room(true, 31.0, 300.0, (25.0, 1007.0)), 1001.0);
+        // A popover already overhanging reports no room, never a negative one.
+        assert_eq!(available_room(true, 2000.0, 300.0, work), 0.0);
+        assert_eq!(available_room(false, -900.0, 300.0, work), 0.0);
     }
 
     #[test]

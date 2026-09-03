@@ -46,8 +46,9 @@
     }
   }
   /* WebView2 does not provide the transparent native popover surface used by
-     macOS. Paint the whole Windows window with an opaque theme surface so the
-     rounded transparent corners cannot reveal a black backing rectangle. */
+     macOS. Paint the whole Windows window with an opaque theme surface, and let
+     DWM round the window frame instead of the panel (see round_window_corners):
+     a rounded panel here would only reveal the square window behind it. */
   :root.windows-opaque {
     --panel: #f6f6f8;
   }
@@ -114,7 +115,13 @@
   canvas#chart { display: block; width: 292px; height: 124px; margin: 6px auto 2px; flex: none; cursor: crosshair; }
 
   .sec-label { font-size: 11px; font-weight: 600; color: var(--ink-2); letter-spacing: .05em; padding: 6px 14px 4px; flex: none; }
-  .nodes { flex: 1; min-height: 0; overflow: hidden; padding: 0 12px 6px; }
+  /* 节点区在高度被屏幕封顶后可滚动,但按要求不显示滚动条 */
+  .nodes {
+    flex: 1; min-height: 0; padding: 0 12px 6px;
+    overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .nodes::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
   .nrow { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px;
           border-radius: 7px; cursor: pointer; }
@@ -765,6 +772,8 @@ function buildNodes() {
       lastDraw = 0;
       scheduleDraw();
       if (expandedUuid) fetchPing(expandedUuid);
+      // 高度被屏幕封顶时列表是滚动的,展开的卡片可能落在视野外
+      if (expandedUuid) revealExpandedCard();
     });
     card.appendChild(row);
 
@@ -937,6 +946,13 @@ function patchNodes() {
   });
 }
 
+// 列表可滚动后,刚展开的卡片可能在视野外,把它带进来。
+function revealExpandedCard() {
+  const container = document.getElementById('nodes');
+  const card = container.querySelector('.card.open');
+  if (card) card.scrollIntoView({ block: 'nearest' });
+}
+
 function drawMinis() {
   const container = document.getElementById('nodes');
   const uuids = visibleUuids();
@@ -947,7 +963,8 @@ function drawMinis() {
   });
 }
 
-// 弹窗高度随内容自适应(只受屏幕高度限制),节点区不出现滚动条。
+// 弹窗高度随内容自适应,上限是托盘图标那一侧屏幕剩下的空间;超出后节点区
+// 自行滚动(无滚动条),窗口不再变高。
 // 高度上限与窗口重定位交给 Rust:它知道弹窗贴着托盘图标的哪一边,
 // 会朝远离该边的方向生长,展开节点时不会顶到屏幕外。
 // 调整大小与窗口初始化存在竞态,设置后校验实际高度,不符则重试。
@@ -1029,6 +1046,8 @@ function ingestSnap(snap) {
 }
 
 async function refresh() {
+  // 每次重新聚焦(即每次打开)都重算高度:屏幕可能换了一块,可用空间也就变了。
+  window.__chartNeeded = null;
   try {
     const s = await invoke('get_settings');
     if (s.chart_range_secs) rangeSecs = s.chart_range_secs;

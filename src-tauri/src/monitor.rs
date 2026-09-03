@@ -19,6 +19,12 @@ const NODES_REFRESH: Duration = Duration::from_secs(60);
 const TRAY_MIN_INTERVAL: Duration = Duration::from_millis(1000);
 const WS_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
+/// How many `/api/recent/{uuid}` requests are in flight at once. Komari has no
+/// endpoint that returns every node's latest report over HTTP, so this path
+/// needs one request per node; issuing them sequentially made a refresh take
+/// node_count × round-trip, which overruns the poll interval well before a
+/// large fleet is reached.
+const RECENT_CONCURRENCY: usize = 8;
 
 pub fn spawn(app: AppHandle) {
     tauri::async_runtime::spawn(engine(app));
@@ -194,27 +200,19 @@ async fn http_loop(
                     nodes = fetch_nodes(client, &base, &s.api_key).await?;
                     last_nodes = Instant::now();
                 }
-                let mut out = Vec::with_capacity(nodes.len());
-                for (uuid, info) in &nodes {
-                    let url = format!("{base}/api/recent/{uuid}");
-                    let mut req = client.get(&url);
-                    if !s.api_key.is_empty() {
-                        req = req.bearer_auth(&s.api_key);
-                    }
-                    let snapshot = match req.send().await {
-                        Ok(resp) if resp.status().is_success() => match resp.json::<Envelope<Vec<Report>>>().await {
-                            Ok(env) => match env.data {
-                                Some(reports) if !reports.is_empty() => {
-                                    report_to_snapshot(info, true, reports.last().unwrap())
-                                }
-                                _ => offline_snapshot(info),
-                            },
-                            Err(_) => offline_snapshot(info),
-                        },
-                        _ => offline_snapshot(info),
-                    };
-                    out.push(snapshot);
-                }
+                // The stream yields owned uuids and the block moves only Copy
+                // references: a closure taking borrowed tuple items would have to
+                // be generic over their lifetimes, which this call cannot express.
+                let uuids: Vec<String> = nodes.keys().cloned().collect();
+                let (known, base_url, key) = (&nodes, base.as_str(), s.api_key.as_str());
+                let mut out: Vec<NodeSnapshot> = futures_util::stream::iter(uuids)
+                    .map(|uuid| async move {
+                        fetch_recent_snapshot(client, base_url, key, &uuid, &known[&uuid]).await
+                    })
+                    // Order does not matter, the list is sorted by name below.
+                    .buffer_unordered(RECENT_CONCURRENCY)
+                    .collect()
+                    .await;
                 out.sort_by(|a, b| a.name.cmp(&b.name));
                 publish(
                     app,
@@ -228,6 +226,38 @@ async fn http_loop(
 
 fn offline_snapshot(info: &ClientInfo) -> NodeSnapshot {
     report_to_snapshot(info, false, &Report::default())
+}
+
+/// One node's latest report. Written as a function rather than an inline async
+/// block so its return type stays generic over the borrowed arguments' lifetimes
+/// — `buffer_unordered` needs that. Anything unexpected counts as offline: a
+/// single unreachable node must not fail the whole refresh.
+async fn fetch_recent_snapshot(
+    client: &reqwest::Client,
+    base: &str,
+    api_key: &str,
+    uuid: &str,
+    info: &ClientInfo,
+) -> NodeSnapshot {
+    let mut req = client.get(format!("{base}/api/recent/{uuid}"));
+    if !api_key.is_empty() {
+        req = req.bearer_auth(api_key);
+    }
+    let Ok(resp) = req.send().await else {
+        return offline_snapshot(info);
+    };
+    if !resp.status().is_success() {
+        return offline_snapshot(info);
+    }
+    match resp.json::<Envelope<Vec<Report>>>().await {
+        Ok(env) => match env.data {
+            Some(reports) if !reports.is_empty() => {
+                report_to_snapshot(info, true, reports.last().unwrap())
+            }
+            _ => offline_snapshot(info),
+        },
+        Err(_) => offline_snapshot(info),
+    }
 }
 
 // ---------------------------------------------------------------------------

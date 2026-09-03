@@ -24,7 +24,7 @@ Komari（[komari-monitor/komari](https://github.com/komari-monitor/komari)）的
 
 | 用途 | 接口 |
 |---|---|
-| 实时快照 | 公开站点使用 WebSocket `/api/clients`（发送 `get` 拉取），失败时自动回退 HTTP；配置 API Key 时直接使用带 Bearer 的 `GET /api/nodes` + `GET /api/recent/{uuid}` 轮询，确保隐藏节点返回完整信息 |
+| 实时快照 | 公开站点使用 WebSocket `/api/clients`（发送 `get` 一次拿回全部节点），失败时自动回退 HTTP；配置 API Key 时改用带 Bearer 的 `GET /api/nodes` + `GET /api/recent/{uuid}` 轮询（每轮最多 8 个请求并发），确保隐藏节点返回完整信息 |
 | 节点名称/规格 | `GET /api/nodes`（每 60 秒刷新；节点标签取自其中的 `tags`，Komari 以 `;` 分隔） |
 | 网络质量 | `GET /api/records/ping?uuid={uuid}&hours=1`（展开节点时拉取，经 Rust 代理避免跨域） |
 | 连接测试 | `GET /api/nodes` + `GET /api/version` |

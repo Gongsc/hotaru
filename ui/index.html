@@ -220,6 +220,8 @@
     <h2>节点</h2>
     <div class="node-head">
       <button class="btn" id="loadNodesBtn" type="button">获取节点列表</button>
+      <button class="btn" id="selectAllNodesBtn" type="button">全选</button>
+      <button class="btn" id="clearAllNodesBtn" type="button">全部取消</button>
       <span id="nodeStatus" role="status" aria-live="polite"></span>
     </div>
     <div class="node-list" id="nodeList"></div>
@@ -317,6 +319,9 @@ function fillSettings(s) {
 function renderNodeList() {
   const list = $('nodeList');
   list.innerHTML = '';
+  // 全选即“显示全部”,哪怕当前一行都没拉出来也可以清掉隐藏集
+  $('selectAllNodesBtn').disabled = !nodeOptions.length && !hiddenNodes.size;
+  $('clearAllNodesBtn').disabled = !nodeOptions.length;
   if (!nodeOptions.length) {
     const empty = document.createElement('p');
     empty.className = 'hint';
@@ -448,6 +453,17 @@ $('loadNodesBtn').addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
   }
+});
+
+$('selectAllNodesBtn').addEventListener('click', () => {
+  // 清掉整个隐藏集,包括列表里已经看不到的旧 uuid —— 否则那些节点会一直隐身
+  hiddenNodes.clear();
+  renderNodeList();
+});
+
+$('clearAllNodesBtn').addEventListener('click', () => {
+  for (const node of nodeOptions) hiddenNodes.add(node.uuid);
+  renderNodeList();
 });
 
 $('autostart').addEventListener('change', async (e) => {

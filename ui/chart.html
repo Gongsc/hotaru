@@ -114,7 +114,30 @@
   .totals { padding: 1px 14px 0; font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
   canvas#chart { display: block; width: 292px; height: 124px; margin: 6px auto 2px; flex: none; cursor: crosshair; }
 
-  .sec-label { font-size: 11px; font-weight: 600; color: var(--ink-2); letter-spacing: .05em; padding: 6px 14px 4px; flex: none; }
+  .sec-label {
+    display: flex; align-items: center; gap: 8px; flex: none;
+    padding: 6px 14px 4px;
+    font-size: 11px; font-weight: 600; letter-spacing: .05em; color: var(--ink-2);
+  }
+  #node-search {
+    flex: 1; min-width: 0; height: 22px; padding: 0 9px;
+    font-family: inherit; font-size: 11.5px; font-weight: 400; letter-spacing: 0;
+    color: var(--ink); background: var(--chip);
+    border: none; border-radius: 99px; outline: none;
+    -webkit-appearance: none; appearance: none;
+    -webkit-user-select: text; user-select: text;
+  }
+  #node-search::placeholder { color: var(--ink-2); }
+  #node-search::-webkit-search-cancel-button { -webkit-appearance: none; }
+  .tagbar { flex: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 0 14px 4px; }
+  /* display:flex 会盖掉 UA 的 [hidden]{display:none},得显式让位 */
+  .tagbar[hidden] { display: none; }
+  .tagbar button {
+    font-family: inherit; font-size: 9px; line-height: 15px; padding: 0 7px;
+    border: none; border-radius: 99px; cursor: pointer;
+    background: var(--chip); color: var(--ink-2);
+  }
+  .tagbar button.on { background: var(--up); color: #0b1220; font-weight: 600; }
   /* 节点区在高度被屏幕封顶后可滚动,但按要求不显示滚动条 */
   .nodes {
     flex: 1; min-height: 0; padding: 0 12px 6px;
@@ -232,7 +255,11 @@
   </div>
   <div class="totals">累计流量 ↑ <b id="total-up">—</b> · ↓ <b id="total-down">—</b></div>
   <canvas id="chart"></canvas>
-  <div class="sec-label">节点</div>
+  <div class="sec-label">
+    <span>节点</span>
+    <input id="node-search" type="search" placeholder="搜索名称或标签" autocomplete="off" spellcheck="false" aria-label="搜索节点名称或标签">
+  </div>
+  <div class="tagbar" id="tagbar" hidden role="group" aria-label="按标签筛选"></div>
   <div class="nodes" id="nodes"><div class="empty" style="color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;">等待数据…</div></div>
   <div class="pf">
     <button id="btn-panel">打开面板</button>
@@ -262,6 +289,8 @@ let nodeSeries = new Map();      // uuid -> [{t, up, down, online}]
 let nodeMeta = new Map();        // uuid -> {name, online, cpu, memPct, uptime, region, os}
 let expandedUuid = null;         // accordion: which node card is open
 let hiddenNodes = new Set();     // uuids the user unchecked in 设置 → 节点
+let nodeQuery = '';              // 搜索框内容(小写),匹配名称或标签
+let activeTags = new Set();      // 选中的标签,任一命中即显示(OR)
 let lastDraw = 0;
 let backendOk = true;
 let onlineCount = null;
@@ -690,8 +719,61 @@ function drawMini(cv, series) {
 let nodesKey = null;
 
 // 未勾选的节点只是不进列表:图标、悬浮提示与汇总曲线仍按全部节点统计。
+// 搜索与标签筛选叠加在它之上,只影响列表,不影响统计。
 function visibleUuids() {
-  return [...nodeMeta.keys()].filter((uuid) => !hiddenNodes.has(uuid));
+  return [...nodeMeta.keys()].filter((uuid) => {
+    if (hiddenNodes.has(uuid)) return false;
+    const meta = nodeMeta.get(uuid);
+    const tags = meta.tags || [];
+    if (activeTags.size && !tags.some((tag) => activeTags.has(tag))) return false;
+    if (!nodeQuery) return true;
+    return (meta.name || '').toLowerCase().includes(nodeQuery)
+      || tags.some((tag) => tag.toLowerCase().includes(nodeQuery));
+  });
+}
+
+// 标签栏只列出未被隐藏的节点身上的标签
+function tagUniverse() {
+  const tags = new Set();
+  for (const [uuid, meta] of nodeMeta) {
+    if (hiddenNodes.has(uuid)) continue;
+    for (const tag of meta.tags || []) tags.add(tag);
+  }
+  return [...tags].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+}
+
+let tagbarKey = null;
+
+function renderTagbar() {
+  const tags = tagUniverse();
+  // 选中的标签消失了(节点下线或被隐藏)就撤掉它,否则会永久筛空
+  for (const tag of [...activeTags]) {
+    if (!tags.includes(tag)) activeTags.delete(tag);
+  }
+  const key = tags.join(' ') + '|' + [...activeTags].sort().join(' ');
+  if (key === tagbarKey) return;
+  tagbarKey = key;
+  // 标签栏出现/消失会改变面板高度,强制走重建那条路(它会调 fitHeight)
+  nodesKey = null;
+
+  const bar = document.getElementById('tagbar');
+  bar.innerHTML = '';
+  bar.hidden = !tags.length;
+  for (const tag of tags) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = tag;               // 后端内容,只用 textContent
+    btn.className = activeTags.has(tag) ? 'on' : '';
+    btn.setAttribute('aria-pressed', activeTags.has(tag) ? 'true' : 'false');
+    btn.addEventListener('click', () => {
+      if (activeTags.has(tag)) activeTags.delete(tag);
+      else activeTags.add(tag);
+      tagbarKey = null;
+      renderTagbar();
+      syncNodes();
+    });
+    bar.appendChild(btn);
+  }
 }
 
 function nodesKeyOf() {
@@ -702,6 +784,7 @@ function nodesKeyOf() {
 }
 
 function syncNodes() {
+  renderTagbar();
   const key = nodesKeyOf();
   if (key !== nodesKey) {
     nodesKey = key;
@@ -721,7 +804,9 @@ function buildNodes() {
     const empty = document.createElement('div');
     empty.className = 'empty';
     empty.style.cssText = 'color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;';
-    empty.textContent = nodeMeta.size ? '节点已全部隐藏' : '暂无节点';
+    empty.textContent = !nodeMeta.size
+      ? '暂无节点'
+      : (nodeQuery || activeTags.size ? '没有匹配的节点' : '节点已全部隐藏');
     container.appendChild(empty);
     fitHeight();
     return;
@@ -1122,7 +1207,25 @@ document.getElementById('btn-settings').addEventListener('click', async () => {
   await invoke('open_settings_cmd').catch(() => {});
   win.hide();
 });
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') win.hide(); });
+const searchInput = document.getElementById('node-search');
+searchInput.addEventListener('input', () => {
+  nodeQuery = searchInput.value.trim().toLowerCase();
+  syncNodes();
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  // 先让 Esc 清掉筛选,免得正在输入时整个弹窗被收起
+  if (searchInput.value || activeTags.size) {
+    searchInput.value = '';
+    nodeQuery = '';
+    activeTags.clear();
+    tagbarKey = null;
+    syncNodes();
+    return;
+  }
+  win.hide();
+});
 window.addEventListener('resize', () => { lastDraw = 0; scheduleDraw(); });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (themeMode === 'system') applyTheme('system');

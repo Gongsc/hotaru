@@ -5,91 +5,92 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hotaru 设置</title>
 <style>
+  /* 与托盘弹窗(ui/chart.html)同一套 Apple 系统色:中性灰面 + sky/emerald
+     两个强调色,避免两个窗口看起来像两个应用。 */
   :root {
     color-scheme: light;
-    --bg: #f3f5f8; --panel: #ffffff; --field: #f8fafc; --border: #d7dee8;
-    --text: #172033; --muted: #5d6b7e; --accent: #059669; --accent2: #0284c7;
-    --danger: #dc2626; --warn: #b45309; --button: #edf1f6; --button-hover: #e2e8f0;
-    --toast-bg: #ecfdf5; --logo-ink: #0b1220;
+    --bg: #ececee; --panel: #f9f9fb; --field: #ffffff; --border: rgba(0, 0, 0, .12);
+    --text: #1d1d1f; --muted: rgba(0, 0, 0, .5); --accent: #34d399; --accent2: #38bdf8;
+    --danger: #ff453a; --warn: #f0a020; --button: rgba(120, 120, 128, .13);
+    --button-hover: rgba(120, 120, 128, .2); --on-accent: #0b1220;
+    --toast-bg: #f9f9fb;
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #0b1220; --panel: #111a2c; --field: #0d1626; --border: #2b3a56;
-    --text: #e6edf7; --muted: #a7b6ca; --accent: #34d399; --accent2: #38bdf8;
-    --danger: #f87171; --warn: #fbbf24; --button: #1a2740; --button-hover: #223154;
-    --toast-bg: #052e22; --logo-ink: #0b1220;
+    --bg: #1e1e20; --panel: #262628; --field: #2f2f31; --border: rgba(255, 255, 255, .14);
+    --text: #f2f2f4; --muted: rgba(255, 255, 255, .55); --accent: #34d399; --accent2: #38bdf8;
+    --danger: #ff6961; --warn: #fbbf24; --button: rgba(255, 255, 255, .1);
+    --button-hover: rgba(255, 255, 255, .17); --on-accent: #0b1220;
+    --toast-bg: #2f2f31;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]):not([data-theme="dark"]) {
       color-scheme: dark;
-      --bg: #0b1220; --panel: #111a2c; --field: #0d1626; --border: #2b3a56;
-      --text: #e6edf7; --muted: #a7b6ca; --accent: #34d399; --accent2: #38bdf8;
-      --danger: #f87171; --warn: #fbbf24; --button: #1a2740; --button-hover: #223154;
-      --toast-bg: #052e22; --logo-ink: #0b1220;
+      --bg: #1e1e20; --panel: #262628; --field: #2f2f31; --border: rgba(255, 255, 255, .14);
+      --text: #f2f2f4; --muted: rgba(255, 255, 255, .55); --accent: #34d399; --accent2: #38bdf8;
+      --danger: #ff6961; --warn: #fbbf24; --button: rgba(255, 255, 255, .1);
+      --button-hover: rgba(255, 255, 255, .17); --on-accent: #0b1220;
+      --toast-bg: #2f2f31;
     }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
-    margin: 0; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-    background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5;
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.5;
   }
-  main { max-width: 600px; margin: 0 auto; padding: 20px 20px 96px; }
-  header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
-  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
-  .logo {
-    width: 30px; height: 30px; border-radius: 9px; flex: none;
-    background: linear-gradient(135deg, #34d399, #38bdf8);
-    display: flex; align-items: center; justify-content: center;
-  }
-  .logo svg { width: 18px; height: 18px; stroke: var(--logo-ink); }
+  main { max-width: 600px; margin: 0 auto; padding: 18px 18px 22px; }
   section {
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: 12px; padding: 16px; margin-bottom: 14px;
+    border-radius: 12px; padding: 14px 14px 15px; margin-bottom: 12px;
   }
   section h2 {
-    font-size: 12px; margin: 0 0 12px; color: var(--muted);
-    font-weight: 600; letter-spacing: .08em;
+    font-size: 11px; margin: 0 0 11px; color: var(--muted);
+    font-weight: 600; letter-spacing: .05em;
   }
-  label.field { display: block; margin-bottom: 12px; }
-  label.field > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+  label.field { display: block; margin-bottom: 11px; }
+  label.field > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11.5px; }
   input[type="text"], input[type="password"], input[type="number"], select {
-    width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
-    background: var(--field); color: var(--text); font-size: 14px; outline: none;
+    width: 100%; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--field); color: var(--text); font-size: 13px;
+    font-family: inherit; outline: none;
   }
   input:focus, select:focus {
     border-color: var(--accent2);
-    box-shadow: 0 0 0 2px rgba(56, 189, 248, .25);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, .22);
   }
   .row { display: flex; gap: 10px; }
   .row > * { flex: 1; }
-  .check { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; cursor: pointer; user-select: none; }
-  .check input { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+  .check { display: flex; align-items: center; gap: 7px; margin: 9px 0 0; cursor: pointer; user-select: none; }
+  .check input { accent-color: var(--accent2); width: 14px; height: 14px; flex: none; }
   .radio-row { display: flex; gap: 16px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
   .radio-row .check { margin: 0; }
   .btn {
-    padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
-    background: var(--button); color: var(--text); cursor: pointer; font-size: 13px;
+    padding: 5px 12px; border-radius: 7px; border: none;
+    background: var(--button); color: var(--text); cursor: pointer;
+    font-size: 12.5px; font-family: inherit;
   }
   .btn:hover { background: var(--button-hover); }
-  .btn:disabled { opacity: .5; cursor: default; }
-  .btn.primary { background: var(--accent); color: #06281c; border-color: transparent; font-weight: 600; }
-  .btn.primary:hover { filter: brightness(1.08); }
+  .btn:active { opacity: .7; }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.primary { background: var(--accent2); color: var(--on-accent); font-weight: 600; }
+  .btn.primary:hover { background: var(--accent2); filter: brightness(1.06); }
   .btn:focus-visible, input:focus-visible, select:focus-visible {
     outline: 2px solid var(--accent2); outline-offset: 2px;
   }
-  #testResult { margin-top: 10px; font-size: 12px; color: var(--muted); min-height: 16px; word-break: break-all; }
+  #testResult { margin-top: 9px; font-size: 11.5px; color: var(--muted); min-height: 16px; word-break: break-all; }
   #testResult.ok { color: var(--accent); }
   #testResult.err { color: var(--danger); }
   .about-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
   .about-product { display: flex; flex-direction: column; gap: 2px; }
-  .about-product strong { font-size: 16px; font-weight: 600; }
-  .about-version { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .about-copy { color: var(--muted); font-size: 12px; margin: 12px 0; }
-  .about-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .github-btn { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-  .github-btn svg { width: 15px; height: 15px; fill: currentColor; }
-  #updateStatus { min-height: 18px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+  .about-product strong { font-size: 15px; font-weight: 600; }
+  .about-version { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .about-copy { color: var(--muted); font-size: 11.5px; margin: 11px 0; }
+  .about-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .github-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .github-btn svg { width: 14px; height: 14px; fill: currentColor; }
+  #updateStatus { min-height: 18px; margin-top: 9px; color: var(--muted); font-size: 11.5px; }
   #updateStatus.ok { color: var(--accent); }
   #updateStatus.update { color: var(--warn); }
   #updateStatus.err { color: var(--danger); }
@@ -102,51 +103,59 @@
   .dot.ok { background: var(--accent); }
   .dot.off { background: var(--danger); }
   .dot.err { background: #64748b; }
-  .status-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
-  .status-msg { color: var(--danger); font-size: 12px; margin-top: 8px; word-break: break-all; }
-  footer {
-    position: fixed; bottom: 0; left: 0; right: 0;
-    background: linear-gradient(transparent, var(--bg) 35%);
-    padding: 16px 20px; display: flex; justify-content: flex-end; gap: 10px;
-  }
+  .status-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 11.5px; color: var(--muted); }
+  .status-msg { color: var(--danger); font-size: 11.5px; margin-top: 8px; word-break: break-all; }
   #toast {
-    position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
-    background: var(--toast-bg); color: var(--accent); border: 1px solid var(--accent);
-    padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .25s;
-    pointer-events: none; font-size: 13px; z-index: 10;
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    background: var(--toast-bg); color: var(--text); border: 1px solid var(--border);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .18);
+    padding: 6px 14px; border-radius: 99px; opacity: 0; transition: opacity .25s;
+    pointer-events: none; font-size: 12.5px; z-index: 10;
   }
   #toast.show { opacity: 1; }
-  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
   .hint a { color: var(--accent2); }
-  .node-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  #nodeStatus { font-size: 12px; color: var(--muted); }
+  /* 分段控件式标签页,与 macOS 的观感一致 */
+  .tabs {
+    display: flex; gap: 2px; margin-bottom: 12px; padding: 2px;
+    background: var(--button); border-radius: 9px;
+  }
+  .tabs button {
+    flex: 1; padding: 5px 10px; border: none; border-radius: 7px;
+    background: transparent; color: var(--muted);
+    font-size: 12.5px; font-family: inherit; cursor: pointer;
+  }
+  .tabs button:hover { color: var(--text); }
+  .tabs button[aria-selected="true"] {
+    background: var(--field); color: var(--text); font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .12);
+  }
+  .tabs button:focus-visible { outline: 2px solid var(--accent2); outline-offset: -2px; }
+  .node-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #nodeStatus { font-size: 11.5px; color: var(--muted); }
   #nodeStatus.err { color: var(--danger); }
-  .node-list { margin-top: 12px; display: flex; flex-direction: column; gap: 2px; max-height: 264px; overflow-y: auto; }
-  .node-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; user-select: none; }
-  .node-row:hover { background: var(--field); }
-  .node-row input { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+  .node-list { margin-top: 11px; display: flex; flex-direction: column; gap: 1px; max-height: 264px; overflow-y: auto; }
+  .node-row { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 7px; cursor: pointer; user-select: none; }
+  .node-row:hover { background: var(--button); }
+  .node-row input { accent-color: var(--accent2); width: 14px; height: 14px; flex: none; }
   .node-row .node-name { flex: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .node-tags { display: flex; gap: 4px; flex-wrap: wrap; min-width: 0; }
   .node-tag {
-    font-size: 11px; padding: 1px 7px; border-radius: 99px; white-space: nowrap;
-    background: var(--button); border: 1px solid var(--border); color: var(--muted);
+    font-size: 10px; line-height: 16px; padding: 0 7px; border-radius: 99px; white-space: nowrap;
+    background: var(--button); color: var(--muted);
   }
-  .node-untagged { font-size: 11px; color: var(--muted); opacity: .65; }
+  .node-untagged { font-size: 10px; color: var(--muted); opacity: .65; }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <div class="logo" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#0b1220" stroke-width="2.4" stroke-linecap="round">
-        <path d="M12 3a9 9 0 1 0 9 9" />
-        <path d="M12 8v4l3 2" />
-      </svg>
-    </div>
-    <h1>Hotaru 设置</h1>
-  </header>
+  <div class="tabs" role="tablist" aria-label="设置分类">
+    <button type="button" role="tab" data-tab="conn" aria-selected="true">连接</button>
+    <button type="button" role="tab" data-tab="general" aria-selected="false">常规</button>
+    <button type="button" role="tab" data-tab="about" aria-selected="false">关于</button>
+  </div>
 
-  <section>
+  <section data-tab="general">
     <h2>外观</h2>
     <label class="field" style="margin-bottom:0;">
       <span>主题</span>
@@ -158,7 +167,7 @@
     </label>
   </section>
 
-  <section>
+  <section data-tab="conn">
     <h2>连接</h2>
     <label class="field">
       <span>后端地址</span>
@@ -177,7 +186,7 @@
     <div id="testResult" role="status"></div>
   </section>
 
-  <section>
+  <section data-tab="general">
     <h2>托盘</h2>
     <label class="check" id="macTitleRow">
       <input type="checkbox" id="showTitle"> macOS 菜单栏显示实时速率文字
@@ -202,7 +211,7 @@
     </label>
   </section>
 
-  <section>
+  <section data-tab="general">
     <h2>图表</h2>
     <label class="field">
       <span>曲线显示区间（托盘左键弹窗）</span>
@@ -216,7 +225,7 @@
     <p class="hint">汇总上下行速率的历史曲线。数据仅保存在内存中（固定保留 6 小时），重启应用后清空；曲线时间粒度与刷新间隔一致。</p>
   </section>
 
-  <section>
+  <section data-tab="conn">
     <h2>节点</h2>
     <div class="node-head">
       <button class="btn" id="loadNodesBtn" type="button">获取节点列表</button>
@@ -228,7 +237,7 @@
     <p class="hint">勾选的节点才会出现在托盘左键弹窗的节点列表里。取消勾选只隐藏列表项：托盘图标、悬浮提示与汇总曲线依旧统计全部节点。标签取自 Komari 的节点设置。</p>
   </section>
 
-  <section id="about">
+  <section id="about" data-tab="about">
     <h2>关于</h2>
     <div class="about-head">
       <div class="about-product">
@@ -249,10 +258,6 @@
   </section>
 </main>
 
-<footer>
-  <button class="btn" id="openPanelBtn" type="button">打开面板</button>
-  <button class="btn primary" id="saveBtn" type="button">保存</button>
-</footer>
 
 <div id="toast" role="status"></div>
 
@@ -261,6 +266,33 @@ const { invoke } = window.__TAURI__.core;
 
 const $ = (id) => document.getElementById(id);
 const isMac = /Mac/i.test(navigator.userAgent);
+
+// 标签页只切换可见性:所有输入都留在 DOM 里,collect()/fillSettings() 照旧
+// 一次读写全部设置,保存与当前停留在哪一页无关。
+const tabButtons = [...document.querySelectorAll('.tabs [role="tab"]')];
+
+function selectTab(name) {
+  for (const btn of tabButtons) {
+    btn.setAttribute('aria-selected', btn.dataset.tab === name ? 'true' : 'false');
+  }
+  for (const section of document.querySelectorAll('main section[data-tab]')) {
+    section.hidden = section.dataset.tab !== name;
+  }
+}
+
+for (const [i, btn] of tabButtons.entries()) {
+  btn.addEventListener('click', () => selectTab(btn.dataset.tab));
+  btn.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = tabButtons[(i + step + tabButtons.length) % tabButtons.length];
+    selectTab(next.dataset.tab);
+    next.focus();
+  });
+}
+
+selectTab('conn');
 let currentSettings = {};
 // Node uuids kept out of the popover list, plus the rows to pick from. The
 // hidden set is what gets persisted, so a node added later stays visible.
@@ -297,7 +329,7 @@ function collect() {
   };
 }
 
-function fillSettings(s) {
+function fillSettings(s, keepNodeList) {
   currentSettings = { ...s };
   $('backendUrl').value = s.backend_url || '';
   $('apiKey').value = s.api_key || '';
@@ -311,7 +343,9 @@ function fillSettings(s) {
   $('theme').value = s.theme || 'system';
   if ($('theme').selectedIndex === -1) $('theme').value = 'system';
   hiddenNodes = new Set(s.hidden_nodes || []);
-  renderNodeList();
+  // 自动保存后不要重建列表:innerHTML 重排会把焦点从刚点的勾选框上抢走,
+  // 并把滚动位置弹回顶部。清洗只做去空白/去重,勾选状态本来就是对的。
+  if (!keepNodeList) renderNodeList();
   applyTheme($('theme').value);
 }
 
@@ -404,24 +438,37 @@ async function boot() {
   await Promise.all([refreshAutostart(), loadAppInfo(), seedNodeList()]);
 }
 
-$('saveBtn').addEventListener('click', async () => {
-  const btn = $('saveBtn');
-  btn.disabled = true;
+// 没有保存按钮了:改动即写盘。文本框用 change(失焦/回车)而不是 input,
+// 否则每敲一个字符都会存一次,而换后端地址会重启监控引擎并清空历史。
+// 同一批连续改动用防抖合并成一次写入。
+let saveTimer = null;
+let saving = false;
+
+async function autoSave() {
+  if (saving) return;
+  saving = true;
   const before = currentSettings;
   try {
     const saved = await invoke('save_settings', { settings: collect() });
     const targetChanged = saved.backend_url !== before.backend_url
       || saved.api_key !== before.api_key
       || saved.accept_invalid_certs !== before.accept_invalid_certs;
-    fillSettings(saved);
-    toast('已保存');
+    fillSettings(saved, true);
     // 换了后端(或凭据)就是换了数据源,列表里那批节点已经不作数了
     if (targetChanged && saved.backend_url) loadNodes();
   } catch (e) {
+    // 成功时保持安静(macOS 的自动保存惯例),只有失败才需要说话
     toast('保存失败：' + e);
   } finally {
-    btn.disabled = false;
+    saving = false;
   }
+}
+
+document.querySelector('main').addEventListener('change', (e) => {
+  // 开机自启不属于 Settings,它有自己的命令
+  if (!(e.target instanceof Element) || e.target.id === 'autostart') return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(autoSave, 300);
 });
 
 $('testBtn').addEventListener('click', async () => {
@@ -534,7 +581,6 @@ $('checkUpdateBtn').addEventListener('click', async () => {
   }
 });
 
-$('openPanelBtn').addEventListener('click', () => invoke('open_panel_cmd'));
 
 boot();
 </script>

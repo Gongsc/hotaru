@@ -102,6 +102,7 @@ pub fn run() {
             commands::open_github_page,
             commands::save_settings,
             commands::get_snapshot,
+            commands::resync_nodes,
             commands::get_net_history,
             commands::test_connection,
             commands::list_nodes,

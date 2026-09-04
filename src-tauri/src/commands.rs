@@ -128,9 +128,24 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<Settings, String> {
+    let previous = state.settings.read().clone();
     let s = settings.sanitized();
     settings::save(&app, &s)?;
+    // A different site (or different credentials) means a different set of
+    // nodes. Drop the old snapshot and history right away, otherwise the
+    // popover keeps listing the previous backend's nodes — and charting their
+    // history — until the engine finishes reconnecting.
+    let target_changed = previous.backend_url != s.backend_url
+        || previous.api_key != s.api_key
+        || previous.accept_invalid_certs != s.accept_invalid_certs;
     *state.settings.write() = s.clone();
+    if target_changed {
+        state.net_history.clear();
+        let connecting = MonitorSnapshot::offline("正在连接后端…");
+        *state.snapshot.write() = connecting.clone();
+        let _ = app.emit("monitor://reset", ());
+        let _ = app.emit("monitor://update", connecting);
+    }
     state.bump_config_epoch();
     windows::sync_theme(&app, s.theme);
     let _ = app.emit("theme://changed", s.theme);
@@ -140,6 +155,16 @@ pub fn save_settings(
     windows::sync_panel_url(&app, &s.backend_url);
     crate::tray::refresh(&app);
     Ok(s)
+}
+
+/// Force the monitor engine to restart its session, which re-reads
+/// `/api/nodes` immediately. Between restarts that list is only refreshed once
+/// a minute, so a node added or renamed on the backend would otherwise keep
+/// showing the stale set in the tray popover long after the settings window's
+/// picker has been refreshed by hand.
+#[tauri::command]
+pub fn resync_nodes(state: State<'_, AppState>) {
+    state.bump_config_epoch();
 }
 
 #[tauri::command]

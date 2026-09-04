@@ -189,13 +189,18 @@ async fn http_loop(
     let mut nodes = fetch_nodes(client, &base, &s.api_key).await?;
     let mut last_nodes = Instant::now();
     let mut last_tray = Instant::now() - TRAY_MIN_INTERVAL;
+    // `interval` fires its first tick immediately, so a freshly (re)started loop
+    // publishes right away instead of showing stale data for a whole poll
+    // interval — which is what a `sleep` at the top of the loop used to do.
+    let mut interval = tokio::time::interval(Duration::from_secs(s.poll_interval_secs.max(1)));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     log::info!("HTTP 轮询模式: {base}");
     clear_error(app);
 
     loop {
         tokio::select! {
             _ = rx.changed() => return Ok(()),
-            _ = tokio::time::sleep(Duration::from_secs(s.poll_interval_secs.max(1))) => {
+            _ = interval.tick() => {
                 if last_nodes.elapsed() >= NODES_REFRESH {
                     nodes = fetch_nodes(client, &base, &s.api_key).await?;
                     last_nodes = Instant::now();

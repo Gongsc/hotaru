@@ -407,10 +407,16 @@ async function boot() {
 $('saveBtn').addEventListener('click', async () => {
   const btn = $('saveBtn');
   btn.disabled = true;
+  const before = currentSettings;
   try {
     const saved = await invoke('save_settings', { settings: collect() });
+    const targetChanged = saved.backend_url !== before.backend_url
+      || saved.api_key !== before.api_key
+      || saved.accept_invalid_certs !== before.accept_invalid_certs;
     fillSettings(saved);
     toast('已保存');
+    // 换了后端(或凭据)就是换了数据源,列表里那批节点已经不作数了
+    if (targetChanged && saved.backend_url) loadNodes();
   } catch (e) {
     toast('保存失败：' + e);
   } finally {
@@ -436,7 +442,7 @@ $('testBtn').addEventListener('click', async () => {
   }
 });
 
-$('loadNodesBtn').addEventListener('click', async () => {
+async function loadNodes() {
   const btn = $('loadNodesBtn');
   const out = $('nodeStatus');
   btn.disabled = true;
@@ -447,13 +453,17 @@ $('loadNodesBtn').addEventListener('click', async () => {
     nodeOptions = await invoke('list_nodes', { settings: collect() });
     renderNodeList();
     out.textContent = `共 ${nodeOptions.length} 个节点`;
+    // 让托盘弹窗也立刻拿到同一份列表:引擎平时每分钟才重读一次 /api/nodes
+    await invoke('resync_nodes').catch(() => {});
   } catch (e) {
     out.className = 'err';
     out.textContent = String(e);
   } finally {
     btn.disabled = false;
   }
-});
+}
+
+$('loadNodesBtn').addEventListener('click', loadNodes);
 
 $('selectAllNodesBtn').addEventListener('click', () => {
   // 清掉整个隐藏集,包括列表里已经看不到的旧 uuid —— 否则那些节点会一直隐身

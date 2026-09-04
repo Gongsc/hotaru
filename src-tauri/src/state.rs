@@ -43,6 +43,13 @@ impl NetHistory {
             .cloned()
             .collect()
     }
+
+    /// Drop everything. Used when the configured backend changes: the stored
+    /// frames belong to the old site's nodes and would otherwise keep showing
+    /// up in the popover's charts for hours.
+    pub fn clear(&self) {
+        self.0.lock().clear();
+    }
 }
 
 /// Shared application state: settings, latest monitor snapshot, in-memory

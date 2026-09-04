@@ -1236,6 +1236,23 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   await listen('theme://changed', (e) => applyTheme(e.payload));
   // 弹窗在两次打开之间只是隐藏,保存设置后需要主动重取(隐藏节点等)
   await listen('settings://changed', () => { refresh(); });
+  // 换了后端 = 换了一整套节点。缓存(节点、曲线、ping、筛选)全部作废,
+  // 否则旧后端的节点会一直挂在列表和曲线里。
+  await listen('monitor://reset', () => {
+    nodeMeta = new Map();
+    nodeSeries = new Map();
+    pingSeries.clear();
+    points = [];
+    totalUp = 0; totalDown = 0;
+    onlineCount = null;
+    expandedUuid = null;
+    activeTags.clear();
+    nodeQuery = '';
+    searchInput.value = '';
+    tagbarKey = null;
+    nodesKey = null;
+    refresh();
+  });
   // Refresh from process memory on focus; the page and node DOM stay alive.
   win.listen('tauri://focus', refresh);
   await restorePin();

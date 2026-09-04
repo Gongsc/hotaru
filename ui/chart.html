@@ -22,6 +22,8 @@
     --tooltip: rgba(239, 239, 242, .96);
     --tooltip-ink: #1d1d1f;
     --tooltip-border: rgba(0, 0, 0, .12);
+    /* 浮层用不透明面:标签弹窗盖在节点列表上,不能透出下面的文字 */
+    --pop: #ffffff;
   }
   :root[data-theme="dark"] {
       color-scheme: dark;
@@ -32,6 +34,7 @@
       --grid: rgba(255, 255, 255, .10);
       --btn: rgba(255, 255, 255, .10);
       --chip: rgba(255, 255, 255, .12);
+      --pop: #2f2f31;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]):not([data-theme="dark"]) {
@@ -43,6 +46,7 @@
       --grid: rgba(255, 255, 255, .10);
       --btn: rgba(255, 255, 255, .10);
       --chip: rgba(255, 255, 255, .12);
+      --pop: #2f2f31;
     }
   }
   /* WebView2 does not provide the transparent native popover surface used by
@@ -129,15 +133,56 @@
   }
   #node-search::placeholder { color: var(--ink-2); }
   #node-search::-webkit-search-cancel-button { -webkit-appearance: none; }
-  .tagbar { flex: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 0 14px 4px; }
-  /* display:flex 会盖掉 UA 的 [hidden]{display:none},得显式让位 */
-  .tagbar[hidden] { display: none; }
-  .tagbar button {
-    font-family: inherit; font-size: 9px; line-height: 15px; padding: 0 7px;
+  .tagwrap { flex: none; position: relative; display: flex; }
+  .tagbtn {
+    position: relative;
+    width: 22px; height: 22px; padding: 0; flex: none;
+    display: flex; align-items: center; justify-content: center;
     border: none; border-radius: 99px; cursor: pointer;
     background: var(--chip); color: var(--ink-2);
   }
-  .tagbar button.on { background: var(--up); color: #0b1220; font-weight: 600; }
+  .tagbtn:hover, .tagbtn.on { color: var(--ink); }
+  .tagbtn svg { display: block; width: 12px; height: 12px; }
+  /* 右下角的已选个数,同时充当"筛选生效中"的指示 */
+  .tagbtn .cnt {
+    position: absolute; right: -2px; bottom: -2px;
+    min-width: 12px; height: 12px; padding: 0 2px; border-radius: 99px;
+    background: var(--up); color: #0b1220;
+    font-size: 8px; line-height: 12px; font-weight: 700; text-align: center;
+    pointer-events: none;
+  }
+  /* display:flex 会盖掉 UA 的 [hidden]{display:none},得显式让位 */
+  .tagbtn[hidden] { display: none; }
+  /* 浮层而非行内块:标签多寡不该改变弹窗高度。方向与高度由 placeTagPop
+     按面板剩余空间决定 —— 筛掉大部分节点后面板会变矮,固定向下展开会被
+     #panel 的 overflow: hidden 裁掉。 */
+  .tagpop {
+    position: absolute; top: calc(100% + 5px); right: 0; z-index: 5;
+    display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start;
+    width: 210px; overflow-y: auto;
+    padding: 7px; border-radius: 9px;
+    background: var(--pop); color: var(--ink);
+    border: .5px solid var(--border);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .tagpop.up { top: auto; bottom: calc(100% + 5px); }
+  .tagpop[hidden] { display: none; }
+  .tagpop::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  .tagpop button {
+    font-family: inherit; font-size: 9.5px; line-height: 16px; padding: 0 7px;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border: none; border-radius: 99px; cursor: pointer;
+    background: var(--chip); color: var(--ink-2);
+  }
+  .tagpop button:hover { color: var(--ink); }
+  .tagpop button.on { background: var(--up); color: #0b1220; font-weight: 600; }
+  .tagpop button.clear {
+    flex: 0 0 100%; margin-top: 2px; line-height: 18px;
+    background: transparent; color: var(--ink-2);
+    border-top: .5px solid var(--border); border-radius: 0;
+  }
+  .tagpop button.clear:hover { color: var(--warn); }
   /* 节点区在高度被屏幕封顶后可滚动,但按要求不显示滚动条 */
   .nodes {
     flex: 1; min-height: 0; padding: 0 12px 6px;
@@ -258,8 +303,15 @@
   <div class="sec-label">
     <span>节点</span>
     <input id="node-search" type="search" placeholder="搜索名称或标签" autocomplete="off" spellcheck="false" aria-label="搜索节点名称或标签">
+    <span class="tagwrap">
+      <button class="tagbtn" id="btn-tags" type="button" hidden aria-expanded="false" aria-haspopup="true" title="按标签筛选" aria-label="按标签筛选">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>
+        </svg>
+      </button>
+      <div class="tagpop" id="tagpop" hidden role="group" aria-label="按标签筛选"></div>
+    </span>
   </div>
-  <div class="tagbar" id="tagbar" hidden role="group" aria-label="按标签筛选"></div>
   <div class="nodes" id="nodes"><div class="empty" style="color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;">等待数据…</div></div>
   <div class="pf">
     <button id="btn-panel">打开面板</button>
@@ -739,6 +791,31 @@ function tagUniverse() {
 }
 
 let tagbarKey = null;
+let tagPopOpen = false;
+
+// 弹窗是浮层而不是行内块,所以标签多寡不会改变面板高度
+function setTagPop(open) {
+  const btn = document.getElementById('btn-tags');
+  tagPopOpen = open && !btn.hidden;
+  document.getElementById('tagpop').hidden = !tagPopOpen;
+  btn.setAttribute('aria-expanded', tagPopOpen ? 'true' : 'false');
+  if (tagPopOpen) placeTagPop();
+}
+
+// 面板高度随筛选后的节点数变化,筛剩一两个节点时会矮到装不下浮层,而
+// #panel 是 overflow: hidden,固定向下展开就会被裁掉。所以每次显示时按
+// 上下剩余空间选方向,并把 max-height 压到真正能放下的尺寸(内部滚动)。
+function placeTagPop() {
+  const pop = document.getElementById('tagpop');
+  const panel = document.getElementById('panel').getBoundingClientRect();
+  const anchor = document.getElementById('btn-tags').getBoundingClientRect();
+  const GAP = 5, EDGE = 8;
+  const below = panel.bottom - anchor.bottom - GAP - EDGE;
+  const above = anchor.top - panel.top - GAP - EDGE;
+  const up = above > below;
+  pop.classList.toggle('up', up);
+  pop.style.maxHeight = Math.max(48, Math.floor(up ? above : below)) + 'px';
+}
 
 function renderTagbar() {
   const tags = tagUniverse();
@@ -749,27 +826,65 @@ function renderTagbar() {
   const key = tags.join(' ') + '|' + [...activeTags].sort().join(' ');
   if (key === tagbarKey) return;
   tagbarKey = key;
-  // 标签栏出现/消失会改变面板高度,强制走重建那条路(它会调 fitHeight)
-  nodesKey = null;
 
-  const bar = document.getElementById('tagbar');
-  bar.innerHTML = '';
-  bar.hidden = !tags.length;
+  const btn = document.getElementById('btn-tags');
+  btn.hidden = !tags.length;
+  btn.classList.toggle('on', activeTags.size > 0);
+  const label = activeTags.size
+    ? '按标签筛选（已选 ' + activeTags.size + ' 个）'
+    : '按标签筛选';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  let cnt = btn.querySelector('.cnt');
+  if (activeTags.size) {
+    if (!cnt) {
+      cnt = document.createElement('span');
+      cnt.className = 'cnt';
+      cnt.setAttribute('aria-hidden', 'true');
+      btn.appendChild(cnt);
+    }
+    cnt.textContent = String(activeTags.size);
+  } else if (cnt) {
+    cnt.remove();
+  }
+  if (btn.hidden) setTagPop(false);
+
+  const pop = document.getElementById('tagpop');
+  pop.innerHTML = '';
   for (const tag of tags) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = tag;               // 后端内容,只用 textContent
-    btn.className = activeTags.has(tag) ? 'on' : '';
-    btn.setAttribute('aria-pressed', activeTags.has(tag) ? 'true' : 'false');
-    btn.addEventListener('click', () => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.textContent = tag;               // 后端内容,只用 textContent
+    chip.className = activeTags.has(tag) ? 'on' : '';
+    chip.setAttribute('aria-pressed', activeTags.has(tag) ? 'true' : 'false');
+    chip.addEventListener('click', (ev) => {
+      // 重建会把这个 chip 从 DOM 摘掉,冒泡到 document 时 closest 就找不到
+      // #tagpop 了,外部点击处理器会误判成"点在外面"而收起弹窗。
+      ev.stopPropagation();
       if (activeTags.has(tag)) activeTags.delete(tag);
       else activeTags.add(tag);
       tagbarKey = null;
       renderTagbar();
       syncNodes();
     });
-    bar.appendChild(btn);
+    pop.appendChild(chip);
   }
+  if (activeTags.size) {
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'clear';
+    clear.textContent = '清除全部';
+    clear.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      activeTags.clear();
+      tagbarKey = null;
+      renderTagbar();
+      syncNodes();
+    });
+    pop.appendChild(clear);
+  }
+  // 内容变了高度也变,重新量一次剩余空间
+  if (tagPopOpen) placeTagPop();
 }
 
 function nodesKeyOf() {
@@ -1209,9 +1324,25 @@ searchInput.addEventListener('input', () => {
   syncNodes();
 });
 
+document.getElementById('btn-tags').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setTagPop(!tagPopOpen);
+});
+
+document.addEventListener('click', (e) => {
+  if (!tagPopOpen) return;
+  if (e.target instanceof Element && e.target.closest('#tagpop, #btn-tags')) return;
+  setTagPop(false);
+});
+
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  // 先让 Esc 清掉筛选,免得正在输入时整个弹窗被收起
+  // Esc 分三级:先收标签弹窗,再清筛选,最后才收起整个面板 —— 免得正在
+  // 输入时一按就没了。
+  if (tagPopOpen) {
+    setTagPop(false);
+    return;
+  }
   if (searchInput.value || activeTags.size) {
     searchInput.value = '';
     nodeQuery = '';
@@ -1222,7 +1353,12 @@ window.addEventListener('keydown', (e) => {
   }
   win.hide();
 });
-window.addEventListener('resize', () => { lastDraw = 0; scheduleDraw(); });
+window.addEventListener('resize', () => {
+  lastDraw = 0;
+  scheduleDraw();
+  // 面板刚被 fitHeight 改过高度,浮层的可用空间也跟着变了
+  if (tagPopOpen) placeTagPop();
+});
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (themeMode === 'system') applyTheme('system');
 });
@@ -1245,6 +1381,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     activeTags.clear();
     nodeQuery = '';
     searchInput.value = '';
+    setTagPop(false);
     tagbarKey = null;
     nodesKey = null;
     refresh();

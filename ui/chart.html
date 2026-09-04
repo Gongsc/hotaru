@@ -691,11 +691,7 @@ function drawNetworkChart(cv, series, compact) {
   }
 
   if (visible.length < 2) {
-    ctx.fillStyle = txt;
-    ctx.font = (compact ? '10.5px' : '12px') + ' -apple-system, "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('正在积累数据…', W / 2, padT + ph / 2 - 6);
-    return;
+    return; // 数据不足时留空,不画占位文字
   }
 
   const data = bucketize(visible, Math.max(2, Math.floor(pw)));

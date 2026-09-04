@@ -108,7 +108,10 @@
   .pin:hover { background: var(--btn); }
   .pin.active { color: var(--down); }
   .pin svg { width: 13px; height: 13px; }
-  .ph .t { font-weight: 600; font-size: 13.5px; }
+  .ph .t {
+    font-weight: 600; font-size: 13.5px;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .ph .t small { font-weight: 400; opacity: .55; margin-left: 6px; font-size: 12px; }
   .chip { font-size: 11px; font-weight: 600; padding: 2.5px 9px; border-radius: 99px; background: var(--chip); opacity: .8; }
   .legend { display: flex; gap: 14px; padding: 6px 14px 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -153,7 +156,7 @@
   }
   /* display:flex 会盖掉 UA 的 [hidden]{display:none},得显式让位 */
   .tagbtn[hidden] { display: none; }
-  /* 浮层而非行内块:标签多寡不该改变弹窗高度。方向与高度由 placeTagPop
+  /* 浮层而非行内块:标签多寡不该改变弹窗高度。方向与高度由 placePop
      按面板剩余空间决定 —— 筛掉大部分节点后面板会变矮,固定向下展开会被
      #panel 的 overflow: hidden 裁掉。 */
   .tagpop {
@@ -183,6 +186,16 @@
     border-top: .5px solid var(--border); border-radius: 0;
   }
   .tagpop button.clear:hover { color: var(--warn); }
+  /* 排序弹窗是竖排菜单,不是标签那样的横向流式胶囊 */
+  .tagpop.menu { width: 136px; flex-direction: column; flex-wrap: nowrap; gap: 1px; }
+  .tagpop.menu button {
+    width: 100%; text-align: left; border-radius: 6px;
+    font-size: 11.5px; line-height: 20px; background: transparent;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  }
+  .tagpop.menu button:hover { background: var(--chip); color: var(--ink); }
+  .tagpop.menu button.on { background: transparent; color: var(--up); font-weight: 600; }
+  .tagpop.menu button i { font-style: normal; opacity: .9; }
   /* 节点区在高度被屏幕封顶后可滚动,但按要求不显示滚动条 */
   .nodes {
     flex: 1; min-height: 0; padding: 0 12px 6px;
@@ -311,6 +324,14 @@
       </button>
       <div class="tagpop" id="tagpop" hidden role="group" aria-label="按标签筛选"></div>
     </span>
+    <span class="tagwrap">
+      <button class="tagbtn" id="btn-sort" type="button" aria-expanded="false" aria-haspopup="true" title="排序" aria-label="排序">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 7h16M7 12h10M10 17h4"/>
+        </svg>
+      </button>
+      <div class="tagpop menu" id="sortpop" hidden role="group" aria-label="排序方式"></div>
+    </span>
   </div>
   <div class="nodes" id="nodes"><div class="empty" style="color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;">等待数据…</div></div>
   <div class="pf">
@@ -343,9 +364,18 @@ let expandedUuid = null;         // accordion: which node card is open
 let hiddenNodes = new Set();     // uuids the user unchecked in 设置 → 节点
 let nodeQuery = '';              // 搜索框内容(小写),匹配名称或标签
 let activeTags = new Set();      // 选中的标签,任一命中即显示(OR)
+// 排序:再次点同一项就反向。默认按名称升序。
+const SORT_KEYS = [
+  ['name', '名称'], ['os', '系统'], ['cpu', 'CPU'], ['mem', '内存'],
+  ['net', '带宽'], ['traffic', '流量'], ['lat', '延迟'], ['loss', '丢包'],
+  ['expiry', '到期时间'],
+];
+let sortKey = 'name';
+let sortAsc = true;
 let lastDraw = 0;
 let backendOk = true;
 let onlineCount = null;
+let totalCount = 0;
 let totalUp = 0, totalDown = 0;
 let themeMode = 'system';
 
@@ -520,9 +550,17 @@ function osIcon(os) {
 }
 
 function renderHeader() {
-  document.getElementById('title').innerHTML = backendOk
-    ? '汇总<small>在线 ' + (onlineCount == null ? '…' : onlineCount) + '</small>'
-    : '⚠ 后端不可达';
+  const title = document.getElementById('title');
+  if (!backendOk) {
+    title.textContent = '⚠ 后端不可达';
+  } else if (onlineCount == null) {
+    title.innerHTML = '汇总<small>…</small>';
+  } else {
+    // 计数覆盖全部节点,和托盘图标/悬浮提示一致 —— 不受节点勾选、搜索或
+    // 标签筛选影响,那些只过滤下面的列表。
+    title.innerHTML = '汇总<small>在线 ' + onlineCount + ' · 离线 '
+      + Math.max(0, totalCount - onlineCount) + ' · 共 ' + totalCount + '</small>';
+  }
   const last = points[points.length - 1];
   document.getElementById('up-now').textContent = last ? fmtRate(last.up) : '—';
   document.getElementById('down-now').textContent = last ? fmtRate(last.down) : '—';
@@ -768,8 +806,47 @@ let nodesKey = null;
 
 // 未勾选的节点只是不进列表:图标、悬浮提示与汇总曲线仍按全部节点统计。
 // 搜索与标签筛选叠加在它之上,只影响列表,不影响统计。
+function sortValue(uuid, meta) {
+  switch (sortKey) {
+    case 'os': return (meta.os || '').toLowerCase();
+    case 'cpu': return meta.cpu;
+    case 'mem': return meta.memPct;
+    case 'net': {
+      const s = nodeSeries.get(uuid);
+      const last = s && s[s.length - 1];
+      return last ? last.up + last.down : 0;
+    }
+    case 'traffic': return (meta.totalUp || 0) + (meta.totalDown || 0);
+    case 'lat': return meta.latency;
+    case 'loss': return meta.loss;
+    case 'expiry': return meta.expiredAt ? Date.parse(meta.expiredAt) : null;
+    default: return (meta.name || '').toLowerCase();
+  }
+}
+
+function byName(a, b) {
+  return (nodeMeta.get(a)?.name || '').localeCompare(nodeMeta.get(b)?.name || '', 'zh-CN');
+}
+
+function compareNodes(a, b) {
+  const va = sortValue(a, nodeMeta.get(a));
+  const vb = sortValue(b, nodeMeta.get(b));
+  // 没有数据的(没配 ping 任务、没有到期时间)永远排在最后,不随升降序翻面
+  const ma = va == null || (typeof va === 'number' && !Number.isFinite(va));
+  const mb = vb == null || (typeof vb === 'number' && !Number.isFinite(vb));
+  if (ma !== mb) return ma ? 1 : -1;
+  if (ma) return byName(a, b);
+  const r = typeof va === 'string' ? va.localeCompare(vb, 'zh-CN') : va - vb;
+  // 同值时退回名称,免得每次刷新顺序都在抖
+  return (sortAsc ? r : -r) || byName(a, b);
+}
+
+// 顺序按"成员+排序设置"缓存:CPU、带宽这类值每秒都在变,若每次刷新都重排,
+// 列表会一直抖到没法点。刷新(重新聚焦弹窗)或改排序时才重新算。
+let orderCache = { key: null, uuids: [] };
+
 function visibleUuids() {
-  return [...nodeMeta.keys()].filter((uuid) => {
+  const filtered = [...nodeMeta.keys()].filter((uuid) => {
     if (hiddenNodes.has(uuid)) return false;
     const meta = nodeMeta.get(uuid);
     const tags = meta.tags || [];
@@ -778,6 +855,9 @@ function visibleUuids() {
     return (meta.name || '').toLowerCase().includes(nodeQuery)
       || tags.some((tag) => tag.toLowerCase().includes(nodeQuery));
   });
+  const key = sortKey + '|' + sortAsc + '|' + filtered.join(',');
+  if (orderCache.key !== key) orderCache = { key, uuids: filtered.sort(compareNodes) };
+  return orderCache.uuids;
 }
 
 // 标签栏只列出未被隐藏的节点身上的标签
@@ -791,30 +871,82 @@ function tagUniverse() {
 }
 
 let tagbarKey = null;
-let tagPopOpen = false;
+// 同时只开一个浮层:null | 'tags' | 'sort'
+const POPS = {
+  tags: { pop: 'tagpop', btn: 'btn-tags' },
+  sort: { pop: 'sortpop', btn: 'btn-sort' },
+};
+let openPop = null;
 
-// 弹窗是浮层而不是行内块,所以标签多寡不会改变面板高度
-function setTagPop(open) {
-  const btn = document.getElementById('btn-tags');
-  tagPopOpen = open && !btn.hidden;
-  document.getElementById('tagpop').hidden = !tagPopOpen;
-  btn.setAttribute('aria-expanded', tagPopOpen ? 'true' : 'false');
-  if (tagPopOpen) placeTagPop();
+// 浮层而不是行内块,所以内容多寡不会改变面板高度
+function setPop(which) {
+  if (which && document.getElementById(POPS[which].btn).hidden) which = null;
+  openPop = which;
+  for (const [name, ids] of Object.entries(POPS)) {
+    const on = name === which;
+    document.getElementById(ids.pop).hidden = !on;
+    document.getElementById(ids.btn).setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (on) placePop(name);
+  }
 }
 
 // 面板高度随筛选后的节点数变化,筛剩一两个节点时会矮到装不下浮层,而
 // #panel 是 overflow: hidden,固定向下展开就会被裁掉。所以每次显示时按
 // 上下剩余空间选方向,并把 max-height 压到真正能放下的尺寸(内部滚动)。
-function placeTagPop() {
-  const pop = document.getElementById('tagpop');
+function placePop(which) {
+  const ids = POPS[which];
+  const pop = document.getElementById(ids.pop);
   const panel = document.getElementById('panel').getBoundingClientRect();
-  const anchor = document.getElementById('btn-tags').getBoundingClientRect();
+  const anchor = document.getElementById(ids.btn).getBoundingClientRect();
   const GAP = 5, EDGE = 8;
   const below = panel.bottom - anchor.bottom - GAP - EDGE;
   const above = anchor.top - panel.top - GAP - EDGE;
   const up = above > below;
   pop.classList.toggle('up', up);
   pop.style.maxHeight = Math.max(48, Math.floor(up ? above : below)) + 'px';
+}
+
+function renderSortPop() {
+  const btn = document.getElementById('btn-sort');
+  const arrow = sortAsc ? '↑' : '↓';
+  const label = (SORT_KEYS.find(([id]) => id === sortKey) || [, '名称'])[1];
+  btn.title = '排序：' + label + ' ' + arrow + '（再点一次换方向）';
+  btn.setAttribute('aria-label', btn.title);
+  let cnt = btn.querySelector('.cnt');
+  if (!cnt) {
+    cnt = document.createElement('span');
+    cnt.className = 'cnt';
+    cnt.setAttribute('aria-hidden', 'true');
+    btn.appendChild(cnt);
+  }
+  cnt.textContent = arrow;
+
+  const pop = document.getElementById('sortpop');
+  pop.innerHTML = '';
+  for (const [id, text] of SORT_KEYS) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = id === sortKey ? 'on' : '';
+    item.setAttribute('aria-pressed', id === sortKey ? 'true' : 'false');
+    const name = document.createElement('span');
+    name.textContent = text;
+    item.appendChild(name);
+    if (id === sortKey) {
+      const dir = document.createElement('i');
+      dir.textContent = arrow;
+      item.appendChild(dir);
+    }
+    item.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (id === sortKey) sortAsc = !sortAsc;
+      else { sortKey = id; sortAsc = true; }
+      orderCache.key = null;
+      renderSortPop();
+      if (openPop === 'sort') placePop('sort');
+      syncNodes();
+    });
+    pop.appendChild(item);
+  }
 }
 
 function renderTagbar() {
@@ -847,7 +979,7 @@ function renderTagbar() {
   } else if (cnt) {
     cnt.remove();
   }
-  if (btn.hidden) setTagPop(false);
+  if (btn.hidden && openPop === 'tags') setPop(null);
 
   const pop = document.getElementById('tagpop');
   pop.innerHTML = '';
@@ -884,7 +1016,7 @@ function renderTagbar() {
     pop.appendChild(clear);
   }
   // 内容变了高度也变,重新量一次剩余空间
-  if (tagPopOpen) placeTagPop();
+  if (openPop === 'tags') placePop('tags');
 }
 
 function nodesKeyOf() {
@@ -1027,18 +1159,6 @@ function buildNodes() {
 // 延迟行:绿 <100ms / 黄 <200ms / 红 ≥200ms;丢包行:绿 0% / 黄 ≤5% / 红 >5%。
 const pingSeries = new Map(); // uuid -> [{t, v, task_id}] v = 延迟 ms,负值表示该次探测丢包
 
-function latestTaskAverage(recs) {
-  const latestByTask = new Map();
-  for (const p of recs) {
-    const taskId = p.task_id ?? 0;
-    const previous = latestByTask.get(taskId);
-    if (!previous || p.t >= previous.t) latestByTask.set(taskId, p);
-  }
-  const valid = [...latestByTask.values()].filter((p) => Number.isFinite(p.v) && p.v >= 0);
-  if (!valid.length) return null;
-  return valid.reduce((sum, p) => sum + p.v, 0) / valid.length;
-}
-
 function renderPingGrid(uuid, refs) {
   const now = Date.now();
   const start = now - GRID_BUCKETS * GRID_BUCKET_MS;
@@ -1076,12 +1196,11 @@ function renderPingGrid(uuid, refs) {
     lat.setAttribute('aria-label', time + '，延迟' + lat.dataset.tipValue);
     loss.setAttribute('aria-label', time + '，丢包' + loss.dataset.tipValue);
   }
-  // 汇总数值:延迟取每个任务的最新结果后求平均;丢包取整小时比例。
-  const averageLat = latestTaskAverage(recs);
-  let neg = 0;
-  for (const p of recs) { if (p.v < 0) neg++; }
-  refs.latNow.textContent = averageLat == null ? '—' : Math.round(averageLat) + 'ms';
-  refs.lossNow.textContent = recs.length ? (neg / recs.length * 100).toFixed(1) + '%' : '—';
+  // 汇总数值直接用快照里的 latency/loss —— 和 CPU、内存同一条链路,展开
+  // 即有,不等这次 ping 请求回来(格子仍需要 1 小时的原始记录)。
+  const meta = nodeMeta.get(uuid) || {};
+  refs.latNow.textContent = meta.latency == null ? '—' : Math.round(meta.latency) + 'ms';
+  refs.lossNow.textContent = meta.loss == null ? '—' : (meta.loss * 100).toFixed(1) + '%';
 }
 
 // 增量补丁：不重建 DOM，只更新在线点与数值
@@ -1195,6 +1314,7 @@ function scheduleDraw() {
 function ingestSnap(snap) {
   backendOk = !!snap.backend_ok;
   onlineCount = snap.nodes.filter((n) => n.online).length;
+  totalCount = snap.nodes.length;
   if (snap.backend_ok) {
     const t = snap.last_update_ms || Date.now();
     nodeMeta = new Map();
@@ -1215,8 +1335,10 @@ function ingestSnap(snap) {
         expiredAt: n.expired_at || null,
         uptime: n.uptime_secs,
         region: n.region || '',
-        os: n.os || '',
+        os: n.os || "",
         tags: n.tags || [],
+        latency: n.latency ?? null,
+        loss: n.loss ?? null,
       });
       totalUp += n.total_up; totalDown += n.total_down;
       let s = nodeSeries.get(n.uuid);
@@ -1244,6 +1366,9 @@ function ingestSnap(snap) {
 async function refresh() {
   // 每次重新聚焦(即每次打开)都重算高度:屏幕可能换了一块,可用空间也就变了。
   window.__chartNeeded = null;
+  // 顺序按 CPU、带宽这类实时值排时会一直变,平时靠缓存稳住;每次打开
+  // 弹窗重新算一次,这样看到的排序是当下的。
+  orderCache.key = null;
   try {
     const s = await invoke('get_settings');
     if (s.chart_range_secs) rangeSecs = s.chart_range_secs;
@@ -1326,21 +1451,27 @@ searchInput.addEventListener('input', () => {
 
 document.getElementById('btn-tags').addEventListener('click', (e) => {
   e.stopPropagation();
-  setTagPop(!tagPopOpen);
+  setPop(openPop === 'tags' ? null : 'tags');
+});
+
+document.getElementById('btn-sort').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setPop(openPop === 'sort' ? null : 'sort');
 });
 
 document.addEventListener('click', (e) => {
-  if (!tagPopOpen) return;
-  if (e.target instanceof Element && e.target.closest('#tagpop, #btn-tags')) return;
-  setTagPop(false);
+  if (!openPop) return;
+  if (e.target instanceof Element
+    && e.target.closest('#tagpop, #btn-tags, #sortpop, #btn-sort')) return;
+  setPop(null);
 });
 
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  // Esc 分三级:先收标签弹窗,再清筛选,最后才收起整个面板 —— 免得正在
+  // Esc 分三级:先收浮层,再清筛选,最后才收起整个面板 —— 免得正在
   // 输入时一按就没了。
-  if (tagPopOpen) {
-    setTagPop(false);
+  if (openPop) {
+    setPop(null);
     return;
   }
   if (searchInput.value || activeTags.size) {
@@ -1357,7 +1488,7 @@ window.addEventListener('resize', () => {
   lastDraw = 0;
   scheduleDraw();
   // 面板刚被 fitHeight 改过高度,浮层的可用空间也跟着变了
-  if (tagPopOpen) placeTagPop();
+  if (openPop) placePop(openPop);
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (themeMode === 'system') applyTheme('system');
@@ -1377,11 +1508,12 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     points = [];
     totalUp = 0; totalDown = 0;
     onlineCount = null;
+    totalCount = 0;
     expandedUuid = null;
     activeTags.clear();
     nodeQuery = '';
     searchInput.value = '';
-    setTagPop(false);
+    setPop(null);
     tagbarKey = null;
     nodesKey = null;
     refresh();
@@ -1389,8 +1521,11 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   // Refresh from process memory on focus; the page and node DOM stay alive.
   win.listen('tauri://focus', refresh);
   await restorePin();
+  renderSortPop();
   refresh();
-  setInterval(() => { if (expandedUuid) fetchPing(expandedUuid); }, 30000);
+  setInterval(() => {
+    if (expandedUuid) fetchPing(expandedUuid);
+  }, 30000);
 })();
 </script>
 </body>

@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt as _;
 
-use crate::models::{normalize_base, now_ms, ClientInfo, Envelope, MonitorSnapshot, NetPoint, Settings};
+use crate::models::{
+    normalize_base, now_ms, ClientInfo, Envelope, MonitorSnapshot, NetPoint, PingPoint, Settings,
+};
 use crate::settings;
 use crate::state::AppState;
 use crate::windows;
@@ -141,6 +143,7 @@ pub fn save_settings(
     *state.settings.write() = s.clone();
     if target_changed {
         state.net_history.clear();
+        state.ping_records.write().clear();
         let connecting = MonitorSnapshot::offline("正在连接后端…");
         *state.snapshot.write() = connecting.clone();
         let _ = app.emit("monitor://reset", ());
@@ -420,24 +423,20 @@ pub fn resize_chart(app: AppHandle, height: f64) -> f64 {
     windows::resize_chart(&app, height)
 }
 
-#[derive(Serialize)]
-pub struct PingPoint {
-    /// Epoch milliseconds.
-    pub t: u64,
-    /// Latency in ms; negative means the probe was lost.
-    pub v: f64,
-    /// Ping task identity, used to average the latest result per target.
-    pub task_id: u64,
-}
 
-/// Proxy the backend's ping-monitor records for one node, so the webview
-/// never has to talk cross-origin to the backend.
+/// Serve the ping records the monitor already keeps for this node. The engine
+/// refreshes them in the background like every other node figure, so expanding
+/// a card no longer waits on a request; only a node the loop has not covered
+/// yet falls through to a live fetch.
 #[tauri::command]
 pub async fn get_ping_records(
     state: State<'_, AppState>,
     uuid: String,
     hours: u64,
 ) -> Result<Vec<PingPoint>, String> {
+    if let Some(cached) = state.ping_records.read().get(&uuid) {
+        return Ok(cached.clone());
+    }
     let s = state.settings.read().clone().sanitized();
     let base = normalize_base(&s.backend_url)?;
     let hours = hours.clamp(1, 24);
@@ -446,19 +445,12 @@ pub async fn get_ping_records(
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
-    let mut req = client.get(format!("{base}/api/records/ping?uuid={uuid}&hours={hours}"));
-    if !s.api_key.is_empty() {
-        req = req.bearer_auth(&s.api_key);
-    }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(parse_ping_records(&body))
+    crate::monitor::fetch_ping_records(&client, &base, &s.api_key, &uuid, hours)
+        .await
+        .ok_or_else(|| "无法获取 ping 记录".to_string())
 }
 
-fn parse_ping_records(body: &serde_json::Value) -> Vec<PingPoint> {
+pub(crate) fn parse_ping_records(body: &serde_json::Value) -> Vec<PingPoint> {
     let mut out = Vec::new();
     if let Some(records) = body.pointer("/data/records").and_then(|v| v.as_array()) {
         for r in records {

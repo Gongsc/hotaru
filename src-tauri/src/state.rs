@@ -78,6 +78,9 @@ pub struct AppState {
     pub panel_epoch: std::sync::atomic::AtomicU64,
     /// Aggregate network samples; lives only for the current process run.
     pub net_history: NetHistory,
+    /// Ping records per node uuid, refreshed by the monitor's ping loop so the
+    /// popover gets latency and loss from memory like every other figure.
+    pub ping_records: RwLock<std::collections::BTreeMap<String, Vec<crate::models::PingPoint>>>,
 }
 
 impl AppState {
@@ -106,6 +109,7 @@ pub fn init(app: &AppHandle) -> AppState {
         panel_recreate_streak: std::sync::atomic::AtomicU64::new(0),
         panel_epoch: std::sync::atomic::AtomicU64::new(1),
         net_history: NetHistory::default(),
+        ping_records: RwLock::new(std::collections::BTreeMap::new()),
     }
 }
 

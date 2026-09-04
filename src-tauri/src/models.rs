@@ -96,6 +96,58 @@ pub fn split_tags(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// One ping-monitor probe.
+#[derive(Serialize, Clone, Copy, Debug)]
+pub struct PingPoint {
+    /// Epoch milliseconds.
+    pub t: u64,
+    /// Latency in ms; negative means the probe was lost.
+    pub v: f64,
+    /// Ping task identity, used to average the latest result per target.
+    pub task_id: u64,
+}
+
+/// Latest ping figures for one node, as a node card shows them.
+#[derive(Serialize, Default, PartialEq, Debug)]
+pub struct PingSummary {
+    /// Mean of each task's most recent successful probe, in ms. `None` when no
+    /// task has a successful probe in the window.
+    pub latency: Option<f64>,
+    /// Share of lost probes over the window, 0.0–1.0. `None` without records.
+    pub loss: Option<f64>,
+}
+
+/// Latency is the mean of each task's newest successful probe — one slow target
+/// should not be hidden by a fast one, and a single task's jitter should not
+/// swing the figure. Loss is counted over the whole window instead, since a
+/// per-task "latest" says nothing about how often probes go missing.
+pub fn summarize_ping(points: &[PingPoint]) -> PingSummary {
+    let mut latest: std::collections::BTreeMap<u64, &PingPoint> = std::collections::BTreeMap::new();
+    for p in points {
+        let slot = latest.entry(p.task_id).or_insert(p);
+        if p.t >= slot.t {
+            *slot = p;
+        }
+    }
+    let ok: Vec<f64> = latest
+        .values()
+        .filter(|p| p.v.is_finite() && p.v >= 0.0)
+        .map(|p| p.v)
+        .collect();
+    PingSummary {
+        latency: if ok.is_empty() {
+            None
+        } else {
+            Some(ok.iter().sum::<f64>() / ok.len() as f64)
+        },
+        loss: if points.is_empty() {
+            None
+        } else {
+            Some(points.iter().filter(|p| p.v < 0.0).count() as f64 / points.len() as f64)
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Snapshots
 // ---------------------------------------------------------------------------
@@ -113,6 +165,12 @@ pub struct NodeSnapshot {
     /// Komari node tags, already split out of its `;`-separated string.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Latest ping figures, merged in from the monitor's ping cache so a node
+    /// card can show them without waiting for a request of its own.
+    #[serde(default)]
+    pub latency: Option<f64>,
+    #[serde(default)]
+    pub loss: Option<f64>,
     pub cpu_usage: f64,
     pub ram_used: u64,
     pub ram_total: u64,
@@ -527,6 +585,8 @@ pub fn report_to_snapshot(info: &ClientInfo, online: bool, r: &Report) -> NodeSn
         region: info.region.clone(),
         os: info.os.clone(),
         tags: split_tags(&info.tags),
+        latency: None,
+        loss: None,
         cpu_usage: r.cpu.as_ref().and_then(|c| c.usage).unwrap_or(0.0),
         ram_used: r.ram.as_ref().and_then(|m| m.used).unwrap_or(0),
         ram_total: r.ram.as_ref().and_then(|m| m.total).unwrap_or(0),
@@ -796,6 +856,27 @@ mod tests {
     }
 
     #[test]
+    fn ping_summary_averages_the_latest_probe_per_task() {
+        let p = |t, v, task_id| PingPoint { t, v, task_id };
+        // Task 7 last succeeded at 40ms, task 9 at 60ms -> mean 50ms. The older
+        // 10ms sample must not count, and the lost probe (-1) is 1 of 4 records.
+        let points = [p(1, 10.0, 7), p(2, 40.0, 7), p(3, -1.0, 9), p(4, 60.0, 9)];
+        let s = summarize_ping(&points);
+        assert_eq!(s.latency, Some(50.0));
+        assert_eq!(s.loss, Some(0.25));
+
+        // Every probe lost: no latency to report, but the loss ratio is known.
+        let lost = [p(1, -1.0, 7), p(2, -1.0, 9)];
+        assert_eq!(
+            summarize_ping(&lost),
+            PingSummary { latency: None, loss: Some(1.0) }
+        );
+
+        // No records at all -> nothing known, so the node sorts last either way.
+        assert_eq!(summarize_ping(&[]), PingSummary::default());
+    }
+
+    #[test]
     fn tags_split_on_semicolons() {
         assert_eq!(split_tags("hk;bgp"), vec!["hk", "bgp"]);
         // Komari lets the field be blank, ragged or padded.
@@ -835,6 +916,8 @@ mod tests {
                 region: String::new(),
                 os: String::new(),
                 tags: Vec::new(),
+                latency: None,
+                loss: None,
                 online: true,
                 cpu_usage: 0.0,
                 ram_used: 0,

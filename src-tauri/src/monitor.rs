@@ -8,8 +8,8 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::models::{
-    report_to_snapshot, normalize_base, now_ms, ws_url_of, ClientInfo, Envelope,
-    MonitorSnapshot, NetFrame, NodeSnapshot, Report, Settings, WsPayload,
+    normalize_base, now_ms, report_to_snapshot, summarize_ping, ws_url_of, ClientInfo, Envelope,
+    MonitorSnapshot, NetFrame, NodeSnapshot, PingSummary, Report, Settings, WsPayload,
 };
 use crate::state::AppState;
 use crate::tray;
@@ -233,6 +233,127 @@ fn offline_snapshot(info: &ClientInfo) -> NodeSnapshot {
     report_to_snapshot(info, false, &Report::default())
 }
 
+/// How often the ping cache is refreshed. Far slower than the snapshot poll:
+/// Komari's ping tasks themselves run on the order of a minute, so anything
+/// quicker would just be extra requests for identical records.
+const PING_REFRESH: Duration = Duration::from_secs(60);
+/// Retry gap while there is nothing to fetch yet (engine still connecting).
+const PING_RETRY: Duration = Duration::from_secs(2);
+/// Window of ping history kept, matching the popover's 1-hour quality grid.
+const PING_HOURS: u64 = 1;
+
+/// Fetch one node's ping records. `None` on any failure — a node the backend
+/// has no ping task for simply has no data, which is not an error.
+pub async fn fetch_ping_records(
+    client: &reqwest::Client,
+    base: &str,
+    api_key: &str,
+    uuid: &str,
+    hours: u64,
+) -> Option<Vec<crate::models::PingPoint>> {
+    let mut req = client.get(format!("{base}/api/records/ping?uuid={uuid}&hours={hours}"));
+    if !api_key.is_empty() {
+        req = req.bearer_auth(api_key);
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    Some(crate::commands::parse_ping_records(&body))
+}
+
+/// Keep the ping cache warm for whichever nodes the snapshot currently holds.
+/// `/api/records/ping` only takes one uuid, so this is one request per node —
+/// issued concurrently, and only once a minute.
+pub fn spawn_ping_loop(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let filled = refresh_ping_cache(&app).await;
+            // Nothing fetched means there was nothing to fetch yet — no backend
+            // configured, or the snapshot has no nodes because the engine is
+            // still connecting. Look again shortly instead of idling a whole
+            // minute, or the first minute after launch (and every backend
+            // switch, which resets the snapshot) would leave the cards without
+            // latency while CPU and memory are already there.
+            tokio::time::sleep(if filled { PING_REFRESH } else { PING_RETRY }).await;
+        }
+    });
+}
+
+/// Refresh the ping cache for the nodes the snapshot currently holds. Returns
+/// whether anything was stored.
+async fn refresh_ping_cache(app: &AppHandle) -> bool {
+    let settings = app.state::<AppState>().settings.read().clone().sanitized();
+    let Ok(base) = normalize_base(&settings.backend_url) else {
+        return false;
+    };
+    let uuids: Vec<String> = app
+        .state::<AppState>()
+        .snapshot
+        .read()
+        .nodes
+        .iter()
+        .map(|n| n.uuid.clone())
+        .collect();
+    if uuids.is_empty() {
+        return false;
+    }
+    let client = build_client(&settings);
+    let (client, base, key) = (&client, base.as_str(), settings.api_key.as_str());
+    let fetched: Vec<Option<(String, Vec<crate::models::PingPoint>)>> =
+        futures_util::stream::iter(uuids)
+            .map(|uuid| async move {
+                let points = fetch_ping_records(client, base, key, &uuid, PING_HOURS).await?;
+                Some((uuid, points))
+            })
+            .buffer_unordered(RECENT_CONCURRENCY)
+            .collect()
+            .await;
+    let fresh: std::collections::BTreeMap<_, _> = fetched.into_iter().flatten().collect();
+    if fresh.is_empty() {
+        // Reachable backend with no ping tasks at all: stop retrying every few
+        // seconds, there is nothing to find.
+        return true;
+    }
+    *app.state::<AppState>().ping_records.write() = fresh;
+    // The snapshot in memory predates this fetch; fold the new figures into it
+    // and push, rather than making the popover wait for the next poll tick.
+    let summaries = ping_summaries(app);
+    let st = app.state::<AppState>();
+    let updated = {
+        let mut snap = st.snapshot.write();
+        merge_ping(&mut snap.nodes, &summaries);
+        snap.clone()
+    };
+    let _ = app.emit(EVENT, updated);
+    true
+}
+
+/// Latest summary per uuid. Cloned out so the ping and snapshot locks are never
+/// held at once — `publish` and this path would otherwise take them in opposite
+/// orders.
+fn ping_summaries(app: &AppHandle) -> std::collections::BTreeMap<String, PingSummary> {
+    app.state::<AppState>()
+        .ping_records
+        .read()
+        .iter()
+        .map(|(uuid, points)| (uuid.clone(), summarize_ping(points)))
+        .collect()
+}
+
+fn merge_ping(
+    nodes: &mut [NodeSnapshot],
+    summaries: &std::collections::BTreeMap<String, PingSummary>,
+) {
+    for node in nodes {
+        if let Some(s) = summaries.get(&node.uuid) {
+            node.latency = s.latency;
+            node.loss = s.loss;
+        }
+    }
+}
+
 /// One node's latest report. Written as a function rather than an inline async
 /// block so its return type stays generic over the borrowed arguments' lifetimes
 /// — `buffer_unordered` needs that. Anything unexpected counts as offline: a
@@ -308,9 +429,15 @@ async fn fetch_nodes(
         .collect())
 }
 
-fn publish(app: &AppHandle, snap: MonitorSnapshot, last_tray: &mut Instant) {
+fn publish(app: &AppHandle, mut snap: MonitorSnapshot, last_tray: &mut Instant) {
+    // Latency and loss ride along with every other figure, so a node card has
+    // them the moment it opens instead of firing its own request. Read out of
+    // the ping cache before touching the snapshot lock: the ping loop takes
+    // them in the other order.
+    let summaries = ping_summaries(app);
     {
         let st = app.state::<AppState>();
+        merge_ping(&mut snap.nodes, &summaries);
         *st.snapshot.write() = snap.clone();
         let nodes = snap
             .nodes

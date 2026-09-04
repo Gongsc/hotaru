@@ -25,7 +25,7 @@ Komari（[komari-monitor/komari](https://github.com/komari-monitor/komari)）的
 | 用途 | 接口 |
 |---|---|
 | 实时快照 | 公开站点使用 WebSocket `/api/clients`（发送 `get` 一次拿回全部节点），失败时自动回退 HTTP；配置 API Key 时改用带 Bearer 的 `GET /api/nodes` + `GET /api/recent/{uuid}` 轮询（每轮最多 8 个请求并发），确保隐藏节点返回完整信息 |
-| 节点名称/规格 | `GET /api/nodes`（每 60 秒刷新；节点标签取自其中的 `tags`，Komari 以 `;` 分隔） |
+| 节点名称/规格 | `GET /api/nodes`（每 60 秒刷新，设置里手动「获取节点列表」会立刻重读一次；节点标签取自其中的 `tags`，Komari 以 `;` 分隔） |
 | 网络质量 | `GET /api/records/ping?uuid={uuid}&hours=1`（展开节点时拉取，经 Rust 代理避免跨域） |
 | 连接测试 | `GET /api/nodes` + `GET /api/version` |
 
@@ -70,5 +70,5 @@ cargo tauri build    # 产出安装包
 ## 已知限制
 
 - Windows 托盘无法显示文字速率（系统限制），信息见悬浮提示与左键弹窗。
-- 速率曲线只存在内存里（固定保留 6 小时），退出应用即清空；时间粒度跟随刷新间隔。
+- 速率曲线只存在内存里（固定保留 6 小时），退出应用即清空；换后端地址或 API Key 保存后也会立即清空并重新积累（旧站点的节点与曲线不会残留）；时间粒度跟随刷新间隔。
 - 累计流量取 Komari 上报的 `network.total_up` / `total_down`，不是“当日”用量；网络质量依赖后端已配置 ping 监控任务。

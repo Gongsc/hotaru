@@ -70,10 +70,12 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
     font-size: 13px; color: var(--ink);
     -webkit-user-select: none; user-select: none;
-    width: 320px; overflow: hidden;
+    /* 跟随窗口宽度而不是写死 320:窗口若因跨屏 DPI 变化短暂不等于 320
+       逻辑像素,布局会自适应,而不是被裁掉两边 */
+    width: 100%; overflow: hidden;
   }
   #panel {
-    width: 320px; height: 100%;
+    width: 100%; height: 100%;
     background: var(--panel);
     backdrop-filter: blur(28px) saturate(1.6);
     -webkit-backdrop-filter: blur(28px) saturate(1.6);

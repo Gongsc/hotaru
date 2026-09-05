@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{
-    webview::PageLoadEvent, AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
+    webview::PageLoadEvent, AppHandle, Manager, PhysicalPosition, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder,
 };
 
@@ -815,7 +815,12 @@ pub fn resize_chart(app: &AppHandle, logical_h: f64) -> f64 {
     let y = anchored_y(below, pos.y as f64, cur_h, target_h, work);
 
     let new_pos = PhysicalPosition::new(pos.x, y as i32);
-    let new_size = PhysicalSize::new(size.width, target_h as u32);
+    // Set the width logically every time rather than carrying the current
+    // physical one forward. The popover can end up on a monitor with a
+    // different scale factor than the one it was built on, and a physical width
+    // frozen at the old scale no longer equals CHART_W logical pixels — the page
+    // still lays out at 320 CSS px, so the window clips it on both sides.
+    let new_size = tauri::LogicalSize::new(CHART_W, applied);
     // Move before growing, shrink before moving: either order leaves the
     // window briefly overhanging the anchored screen edge otherwise.
     if target_h > cur_h {

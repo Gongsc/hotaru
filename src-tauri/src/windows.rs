@@ -263,7 +263,7 @@ pub fn recreate_panel(app: &AppHandle) {
         let inner = handle.clone();
         let _ = handle.run_on_main_thread(move || {
             if let Some(base) = base {
-                let _ = create_panel(&inner, &base);
+                let _ = create_panel(&inner, &base, true);
             } else {
                 open_panel(&inner);
             }
@@ -333,8 +333,9 @@ pub fn mark_panel_loaded(app: &AppHandle) {
 /// window can't stay invisible; if that navigation never finished, reload at
 /// 20s. Only arm this where a navigation is actually pending — on a panel that
 /// is merely being re-shown there is nothing to wait for, and the 20s reload
-/// would fire on every open.
-pub fn spawn_panel_watchdog(app: &AppHandle) {
+/// would fire on every open. `expect_visible` is false for a silent start,
+/// where an invisible panel is the point rather than a fault to heal.
+pub fn spawn_panel_watchdog(app: &AppHandle, expect_visible: bool) {
     let handle = app.clone();
     let st = handle.state::<AppState>();
     let before = st.panel_load_ms.load(std::sync::atomic::Ordering::Relaxed);
@@ -351,7 +352,10 @@ pub fn spawn_panel_watchdog(app: &AppHandle) {
         }
         // A minimized window is invisible on macOS but deliberately so — never
         // un-minimize it here, that is the user's state to keep.
-        if !window.is_visible().unwrap_or(true) && !window.is_minimized().unwrap_or(false) {
+        if expect_visible
+            && !window.is_visible().unwrap_or(true)
+            && !window.is_minimized().unwrap_or(false)
+        {
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -465,11 +469,11 @@ fn open_panel_on_main(app: &AppHandle) {
             // on. Arming it when merely re-showing an already-loaded panel made
             // the page reload itself 20s after every open.
             if navigated {
-                spawn_panel_watchdog(app);
+                spawn_panel_watchdog(app, true);
             }
         }
         None => {
-            let _ = create_panel(app, &base);
+            let _ = create_panel(app, &base, true);
         }
     }
 }
@@ -492,13 +496,26 @@ pub fn sync_panel_url(app: &AppHandle, backend_url: &str) {
     }
 }
 
-fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
+/// Create the panel webview at launch without showing it (silent start). It is
+/// still built up front rather than on first use, so opening it later is just a
+/// `show` — see `create_panel` for why lazy creation is avoided.
+pub fn preload_panel_hidden(app: &AppHandle) {
+    let raw = app.state::<AppState>().settings.read().backend_url.clone();
+    let Ok(base) = normalize_base(&raw) else { return };
+    let _ = create_panel(app, &base, false);
+}
+
+/// Build the panel window. `visible` is false for a silent start: the webview
+/// is still created up front (a lazily created External webview has been
+/// unreliable here) but never shown, so the app comes up in the tray only.
+fn create_panel(app: &AppHandle, base: &str, visible: bool) -> tauri::Result<()> {
     let url: url::Url = base.parse().map_err(|_| tauri::Error::WindowNotFound)?;
     let theme = app.state::<AppState>().settings.read().theme;
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
         .title("Hotaru Panel")
         .theme(native_theme(theme))
         .decorations(false)
+        .visible(visible)
         .initialization_script(panel_chrome_script())
         .on_page_load(|window, payload| match payload.event() {
             PageLoadEvent::Started => {
@@ -514,8 +531,10 @@ fn create_panel(app: &AppHandle, base: &str) -> tauri::Result<()> {
         .min_inner_size(780.0, 560.0)
         .build()?;
     *app.state::<AppState>().loaded_panel_url.lock() = Some(base.to_string());
-    let _ = window.set_focus();
-    spawn_panel_watchdog(app);
+    if visible {
+        let _ = window.set_focus();
+    }
+    spawn_panel_watchdog(app, visible);
     Ok(())
 }
 

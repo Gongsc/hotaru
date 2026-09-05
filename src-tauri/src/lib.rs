@@ -30,15 +30,16 @@ pub fn run() {
             monitor::spawn_ping_loop(handle.clone());
             // 面板必须在启动时创建:实测经 IPC/命令线程延后创建的 External
             // webview 在本机 WebView2 上会静默失败(白屏且导航不启动)。
-            if handle
-                .state::<AppState>()
-                .settings
-                .read()
-                .backend_url
-                .trim()
-                .is_empty()
-            {
+            // 静默启动只是不显示它,窗口照旧建好。
+            let (unconfigured, silent) = {
+                let state = handle.state::<AppState>();
+                let s = state.settings.read();
+                (s.backend_url.trim().is_empty(), s.silent_start)
+            };
+            if unconfigured {
                 windows::open_settings(&handle);
+            } else if silent {
+                windows::preload_panel_hidden(&handle);
             } else {
                 windows::open_panel(&handle);
             }

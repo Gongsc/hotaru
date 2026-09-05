@@ -23,6 +23,9 @@ pub struct Settings {
     /// an empty list means "show everything". Display only — the tray icon,
     /// tooltip and aggregate chart still cover every node.
     pub hidden_nodes: Vec<String>,
+    /// Start into the tray only: the panel webview is still created at launch
+    /// but stays hidden until asked for.
+    pub silent_start: bool,
 }
 
 impl Default for Settings {
@@ -40,6 +43,7 @@ impl Default for Settings {
             chart_range_secs: CHART_RANGE_DEFAULT,
             theme: ThemeMode::System,
             hidden_nodes: Vec::new(),
+            silent_start: false,
         }
     }
 }
@@ -906,6 +910,8 @@ mod tests {
     fn hidden_nodes_default_for_settings_saved_before_the_field_existed() {
         let s: Settings = serde_json::from_str(r#"{"backend_url":"https://x.example"}"#).unwrap();
         assert!(s.hidden_nodes.is_empty());
+        // Silent start is opt-in, so an older config still opens the panel.
+        assert!(!s.silent_start);
     }
 
     impl NodeSnapshot {

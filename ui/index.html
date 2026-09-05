@@ -209,6 +209,9 @@
     <label class="check">
       <input type="checkbox" id="autostart"> 开机自启
     </label>
+    <label class="check">
+      <input type="checkbox" id="silentStart"> 静默启动（启动时不打开主面板，只驻留托盘）
+    </label>
   </section>
 
   <section data-tab="general">
@@ -326,6 +329,7 @@ function collect() {
     chart_range_secs: Number($('chartRange').value) || 900,
     theme: $('theme').value,
     hidden_nodes: [...hiddenNodes],
+    silent_start: $('silentStart').checked,
   };
 }
 
@@ -338,6 +342,7 @@ function fillSettings(s, keepNodeList) {
   $('memWarn').value = s.mem_warn_pct ?? 85;
   $('showTitle').checked = !!s.show_menu_bar_text;
   $('acceptInvalid').checked = !!s.accept_invalid_certs;
+  $('silentStart').checked = !!s.silent_start;
   $('chartRange').value = String(s.chart_range_secs ?? 900);
   if ($('chartRange').selectedIndex === -1) $('chartRange').value = '900';
   $('theme').value = s.theme || 'system';

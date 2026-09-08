@@ -49,8 +49,8 @@
     font-size: 11px; margin: 0 0 11px; color: var(--muted);
     font-weight: 600; letter-spacing: .05em;
   }
-  label.field { display: block; margin-bottom: 11px; }
-  label.field > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11.5px; }
+  .field { display: block; margin-bottom: 11px; }
+  .field > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11.5px; }
   input[type="text"], input[type="password"], input[type="number"], select {
     width: 100%; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--border);
     background: var(--field); color: var(--text); font-size: 13px;
@@ -64,7 +64,7 @@
   .row > * { flex: 1; }
   .check { display: flex; align-items: center; gap: 7px; margin: 9px 0 0; cursor: pointer; user-select: none; }
   .check input { accent-color: var(--accent2); width: 14px; height: 14px; flex: none; }
-  .radio-row { display: flex; gap: 16px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .radio-row { display: flex; gap: 8px 16px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
   .radio-row .check { margin: 0; }
   .btn {
     padding: 5px 12px; border-radius: 7px; border: none;
@@ -157,7 +157,7 @@
 
   <section data-tab="general">
     <h2>外观</h2>
-    <label class="field" style="margin-bottom:0;">
+    <label class="field">
       <span>主题</span>
       <select id="theme" aria-label="应用主题">
         <option value="system">跟随系统</option>
@@ -165,6 +165,16 @@
         <option value="dark">暗色</option>
       </select>
     </label>
+    <div class="field" style="margin-bottom:0;">
+      <span>节点名称后显示（托盘左键弹窗）</span>
+      <div class="radio-row" role="radiogroup" aria-label="节点名称后显示的内容" style="margin-bottom:0;">
+        <label class="check"><input type="radio" name="nodeBadge" value="tags"> 标签</label>
+        <label class="check"><input type="radio" name="nodeBadge" value="ping"> 延迟与丢包</label>
+        <label class="check"><input type="radio" name="nodeBadge" value="net"> 上下行网速</label>
+        <label class="check"><input type="radio" name="nodeBadge" value="expiry"> 到期时间</label>
+      </div>
+      <p class="hint">只改折叠状态下那一行的显示；展开节点仍能看到全部指标。按标签筛选与搜索不受影响。</p>
+    </div>
   </section>
 
   <section data-tab="conn">
@@ -308,6 +318,21 @@ function applyTheme(theme) {
   else document.documentElement.dataset.theme = value;
 }
 
+// 单选组没有 select 那样的 value,读写都走 name=nodeBadge 这一组。
+const NODE_BADGES = ['tags', 'ping', 'net', 'expiry'];
+
+function nodeBadgeValue() {
+  const picked = document.querySelector('input[name="nodeBadge"]:checked');
+  return picked && NODE_BADGES.includes(picked.value) ? picked.value : 'tags';
+}
+
+function setNodeBadge(value) {
+  const wanted = NODE_BADGES.includes(value) ? value : 'tags';
+  for (const radio of document.querySelectorAll('input[name="nodeBadge"]')) {
+    radio.checked = radio.value === wanted;
+  }
+}
+
 function toast(text) {
   const t = $('toast');
   t.textContent = text;
@@ -329,6 +354,7 @@ function collect() {
     chart_range_secs: Number($('chartRange').value) || 900,
     theme: $('theme').value,
     hidden_nodes: [...hiddenNodes],
+    node_badge: nodeBadgeValue(),
     silent_start: $('silentStart').checked,
   };
 }
@@ -343,6 +369,7 @@ function fillSettings(s, keepNodeList) {
   $('showTitle').checked = !!s.show_menu_bar_text;
   $('acceptInvalid').checked = !!s.accept_invalid_certs;
   $('silentStart').checked = !!s.silent_start;
+  setNodeBadge(s.node_badge);
   $('chartRange').value = String(s.chart_range_secs ?? 900);
   if ($('chartRange').selectedIndex === -1) $('chartRange').value = '900';
   $('theme').value = s.theme || 'system';

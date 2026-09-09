@@ -1355,8 +1355,31 @@ function drawMinis() {
 // 自行滚动(无滚动条),窗口不再变高。
 // 高度上限与窗口重定位交给 Rust:它知道弹窗贴着托盘图标的哪一边,
 // 会朝远离该边的方向生长,展开节点时不会顶到屏幕外。
-// 调整大小与窗口初始化存在竞态,设置后校验实际高度,不符则重试。
+//
+// 同一时刻只允许一轮在跑。快照、历史、focus 刷新都会触发调整,各自捕获一个
+// 高度再各跑一轮重试的话,应用刚启动、节点还没到的那次打开会让窗口在"空列表"
+// 和"有节点"两个高度之间来回跳 —— 这就是第一次打开时下半截闪的原因。
+let fitting = false;
+let fitAgain = false;
+
 async function fitHeight() {
+  if (fitting) {
+    // 正在跑的那一轮拿的是过期高度了,让它收尾时按最新内容重量一次
+    fitAgain = true;
+    return;
+  }
+  fitting = true;
+  try {
+    do {
+      fitAgain = false;
+      await fitHeightOnce();
+    } while (fitAgain);
+  } finally {
+    fitting = false;
+  }
+}
+
+async function fitHeightOnce() {
   const panel = document.getElementById('panel');
   panel.style.height = 'auto';
   const needed = panel.offsetHeight;
@@ -1367,11 +1390,18 @@ async function fitHeight() {
   panel.style.height = '100%';
   if (window.__chartNeeded === needed) return;
   window.__chartNeeded = needed;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  // 最多下发两次。窗口刚创建时 set_size 可能被初始化盖掉,所以保留一次补发;
+  // 但补发之间只是等 viewport 跟上,不反复下发同一个高度 —— 窗口已经是那个
+  // 尺寸了,再设一次只会让它多跳一下。
+  for (let issue = 0; issue < 2; issue++) {
     const applied = await invoke('resize_chart', { height: needed }).catch(() => null);
     if (typeof applied !== 'number') return;
-    await new Promise((r) => setTimeout(r, 120));
-    if (window.innerHeight === Math.round(applied)) return;
+    for (let wait = 0; wait < 6; wait++) {
+      await new Promise((r) => setTimeout(r, 60));
+      if (window.innerHeight === Math.round(applied)) return;
+      // 内容又变了,别再为这个过期高度较劲,交给下一轮
+      if (fitAgain) return;
+    }
   }
 }
 

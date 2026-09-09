@@ -1,6 +1,6 @@
 [package]
 name = "hotaru"
-version = "0.1.8"
+version = "0.1.9"
 description = "Komari monitoring tray app for macOS and Windows"
 license = "GPL-3.0-only"
 authors = ["Gongsc"]

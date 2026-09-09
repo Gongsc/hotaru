@@ -44,6 +44,13 @@ jobs:
         shell: bash
         run: cargo tauri build --target ${{ matrix.target }}
 
+      # Tauri 的 bundle_dmg.sh 会留下一个没有隐藏标志的 .VolumeIcon.icns,
+      # Finder 开着显示隐藏文件时它会出现在安装窗口里
+      - name: Strip the dmg's volume icon file
+        if: runner.os == 'macOS'
+        shell: bash
+        run: tools/strip-dmg-volume-icon.sh src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

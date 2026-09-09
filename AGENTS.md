@@ -11,6 +11,7 @@ The build-free frontend is in `ui/` (`index.html` and `chart.html`). Capabilitie
 - `cargo install tauri-cli --locked --version "^2"` installs the expected Tauri CLI.
 - `cargo tauri dev` runs the desktop app from the repository root with live rebuilds.
 - `cargo tauri build` creates platform installers under `src-tauri/target/release/bundle/`.
+- `tools/strip-dmg-volume-icon.sh <dmg>` removes the stray `.VolumeIcon.icns` Tauri leaves inside a macOS dmg; run it after `cargo tauri build` (the release workflow does this on its own).
 - `cargo test --manifest-path src-tauri/Cargo.toml` runs the Rust unit tests.
 - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` verifies formatting.
 - `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` catches Rust lint issues.

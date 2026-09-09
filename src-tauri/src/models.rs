@@ -23,6 +23,8 @@ pub struct Settings {
     /// an empty list means "show everything". Display only — the tray icon,
     /// tooltip and aggregate chart still cover every node.
     pub hidden_nodes: Vec<String>,
+    /// What the popover's collapsed node row shows after the name.
+    pub node_badge: NodeBadge,
     /// Start into the tray only: the panel webview is still created at launch
     /// but stays hidden until asked for.
     pub silent_start: bool,
@@ -43,6 +45,7 @@ impl Default for Settings {
             chart_range_secs: CHART_RANGE_DEFAULT,
             theme: ThemeMode::System,
             hidden_nodes: Vec::new(),
+            node_badge: NodeBadge::Tags,
             silent_start: false,
         }
     }
@@ -55,6 +58,23 @@ pub enum ThemeMode {
     System,
     Light,
     Dark,
+}
+
+/// What the tray popover puts after a node's name in the collapsed row. The
+/// node tags are only one of the choices; the others are live figures the
+/// popover already has, so switching costs no extra request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeBadge {
+    /// Komari 的节点标签
+    #[default]
+    Tags,
+    /// 当前延迟与丢包率
+    Ping,
+    /// 当前上下行速率
+    Net,
+    /// 距到期还剩多久
+    Expiry,
 }
 
 /// Selectable display ranges (seconds) for the tray network chart.
@@ -628,6 +648,18 @@ mod tests {
         dark.theme = ThemeMode::Dark;
         let json = serde_json::to_value(&dark).unwrap();
         assert_eq!(json["theme"], "dark");
+    }
+
+    #[test]
+    fn node_badge_defaults_for_settings_saved_before_the_field_existed() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.node_badge, NodeBadge::Tags);
+
+        let net = Settings { node_badge: NodeBadge::Net, ..Settings::default() };
+        let json = serde_json::to_value(&net).unwrap();
+        assert_eq!(json["node_badge"], "net");
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.sanitized().node_badge, NodeBadge::Net);
     }
 
     #[test]

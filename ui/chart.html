@@ -222,6 +222,11 @@
     background: var(--chip); color: var(--ink-2); white-space: nowrap;
     max-width: 80px; overflow: hidden; text-overflow: ellipsis;
   }
+  /* 指标徽章沿用格子图的配色:绿=好,黄=注意,红=告警 */
+  .nrow .ntag.num { font-variant-numeric: tabular-nums; }
+  .nrow .ntag.g { color: var(--down); }
+  .nrow .ntag.a { color: var(--amber); }
+  .nrow .ntag.r { color: var(--warn); }
   .nrow .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--down); }
   .nrow .dot.off { background: var(--off); }
   .nrow .chev { flex: none; width: 14px; text-align: center; font-size: 10px; color: var(--ink-2);
@@ -366,6 +371,10 @@ let expandedUuid = null;         // accordion: which node card is open
 let hiddenNodes = new Set();     // uuids the user unchecked in 设置 → 节点
 let nodeQuery = '';              // 搜索框内容(小写),匹配名称或标签
 let activeTags = new Set();      // 选中的标签,任一命中即显示(OR)
+// 折叠行里名称后面显示什么(设置 → 外观):标签,或一组实时指标。
+// 指标模式下的槽位数量,由 buildNodes 建好、patchNodes 就地填值。
+const BADGE_SLOTS = { ping: 2, net: 2, expiry: 1 };
+let nodeBadge = 'tags';
 // 排序:再次点同一项就反向。默认按名称升序。
 const SORT_KEYS = [
   ['name', '名称'], ['os', '系统'], ['cpu', 'CPU'], ['mem', '内存'],
@@ -454,11 +463,25 @@ function fmtUptime(s) {
   return m + '分钟';
 }
 
-function fmtRemaining(expiredAt) {
-  if (!expiredAt) return '长期';
+// 徽章里的速率只有几十像素宽,用 1.2M/340K/12B 这种紧凑写法,完整值放 title。
+function fmtRateShort(bps) {
+  if (!Number.isFinite(bps) || bps < 0) bps = 0;
+  if (bps >= 1048576) return (bps / 1048576).toFixed(1) + 'M';
+  if (bps >= 1024) return (bps / 1024).toFixed(0) + 'K';
+  return Math.round(bps) + 'B';
+}
+
+// 距到期还有几天;没设到期时间或时间解析不了都返回 null。
+function remainingDays(expiredAt) {
+  if (!expiredAt) return null;
   const expires = Date.parse(expiredAt);
-  if (!Number.isFinite(expires)) return '—';
-  const days = Math.ceil((expires - Date.now()) / 86400000);
+  if (!Number.isFinite(expires)) return null;
+  return Math.ceil((expires - Date.now()) / 86400000);
+}
+
+function fmtRemaining(expiredAt) {
+  const days = remainingDays(expiredAt);
+  if (days === null) return expiredAt ? '—' : '长期';
   if (days <= 0) return '已到期';
   if (days >= 365) return Math.floor(days / 365) + '年' + (days % 365) + '天';
   if (days >= 30) return Math.floor(days / 30) + '个月' + (days % 30) + '天';
@@ -1023,9 +1046,10 @@ function renderTagbar() {
 
 function nodesKeyOf() {
   // 标签也进 key,后端改了标签下次刷新就能重建出来。
+  // 徽章模式换了要重排槽位,同样进 key。
   return visibleUuids()
     .map((uuid) => uuid + ':' + (nodeMeta.get(uuid).tags || []).join('|'))
-    .join(',') + '|' + expandedUuid;
+    .join(',') + '|' + expandedUuid + '|' + nodeBadge;
 }
 
 function syncNodes() {
@@ -1034,9 +1058,9 @@ function syncNodes() {
   if (key !== nodesKey) {
     nodesKey = key;
     buildNodes();
-  } else {
-    patchNodes();
   }
+  // 重建后也补一次数值:buildNodes 只搭骨架,不然新槽位要空到下一次轮询。
+  patchNodes();
 }
 
 function buildNodes() {
@@ -1069,13 +1093,24 @@ function buildNodes() {
     row.innerHTML = '<span class="flag"></span><span class="os"></span>' +
       '<span class="dot' + (meta.online ? '' : ' off') + '"></span>' +
       '<span class="name"></span><span class="tags"></span><span class="chev">▶</span>';
-    // 标签来自后端,只用 textContent 写入
     const tagsEl = row.querySelector('.tags');
-    for (const tag of meta.tags || []) {
-      const chip = document.createElement('span');
-      chip.className = 'ntag';
-      chip.textContent = tag;
-      tagsEl.appendChild(chip);
+    const badges = [];
+    if (nodeBadge === 'tags') {
+      // 标签来自后端,只用 textContent 写入
+      for (const tag of meta.tags || []) {
+        const chip = document.createElement('span');
+        chip.className = 'ntag';
+        chip.textContent = tag;
+        tagsEl.appendChild(chip);
+      }
+    } else {
+      // 指标每次轮询都在变,这里只留空槽,填值交给 patchNodes
+      for (let i = 0; i < (BADGE_SLOTS[nodeBadge] || 1); i++) {
+        const chip = document.createElement('span');
+        chip.className = 'ntag num';
+        tagsEl.appendChild(chip);
+        badges.push(chip);
+      }
     }
     const code = countryCodeOf(meta.region);
     const flagEl = row.querySelector('.flag');
@@ -1133,6 +1168,7 @@ function buildNodes() {
     container.appendChild(card);
     card._refs = {
       row,
+      badges,
       upt: body.querySelector('.up-t'),
       expire: body.querySelector('.expire-t'),
       totalUp: body.querySelector('.total-up'),
@@ -1205,6 +1241,40 @@ function renderPingGrid(uuid, refs) {
   refs.lossNow.textContent = meta.loss == null ? '—' : (meta.loss * 100).toFixed(1) + '%';
 }
 
+function setChip(chip, text, tone, title) {
+  if (!chip) return;
+  chip.className = 'ntag num' + (tone ? ' ' + tone : '');
+  chip.textContent = text;
+  chip.title = title;
+}
+
+// 名称后的指标徽章。阈值与展开卡片里的格子图一致,同一个数在两处看到的
+// 颜色才是一个意思。
+function paintBadges(chips, meta, uuid) {
+  if (!chips || !chips.length) return;
+  if (nodeBadge === 'ping') {
+    const lat = meta.latency, loss = meta.loss;
+    setChip(chips[0], lat == null ? '—' : Math.round(lat) + 'ms',
+      lat == null ? '' : lat < 100 ? 'g' : lat < 200 ? 'a' : 'r',
+      lat == null ? '延迟：无数据' : '延迟 ' + Math.round(lat) + ' ms');
+    setChip(chips[1], loss == null ? '—' : (loss * 100).toFixed(1) + '%',
+      loss == null ? '' : loss === 0 ? 'g' : loss <= 0.05 ? 'a' : 'r',
+      loss == null ? '丢包：无数据' : '丢包 ' + (loss * 100).toFixed(1) + '%');
+  } else if (nodeBadge === 'net') {
+    const s = nodeSeries.get(uuid);
+    const last = meta.online ? s && s[s.length - 1] : null;
+    setChip(chips[0], '↑' + (last ? fmtRateShort(last.up) : '—'), '',
+      last ? '上行 ' + fmtRate(last.up) : '离线');
+    setChip(chips[1], '↓' + (last ? fmtRateShort(last.down) : '—'), '',
+      last ? '下行 ' + fmtRate(last.down) : '离线');
+  } else {
+    const days = remainingDays(meta.expiredAt);
+    setChip(chips[0], fmtRemaining(meta.expiredAt),
+      days === null ? '' : days <= 0 ? 'r' : days <= 7 ? 'a' : '',
+      meta.expiredAt ? '到期 ' + meta.expiredAt : '未设置到期时间');
+  }
+}
+
 // 增量补丁：不重建 DOM，只更新在线点与数值
 function patchNodes() {
   const container = document.getElementById('nodes');
@@ -1218,6 +1288,7 @@ function patchNodes() {
       const r = card._refs;
       if (!r) return;
       r.row.querySelector('.dot').className = 'dot' + (meta.online ? '' : ' off');
+      if (nodeBadge !== 'tags') paintBadges(r.badges, meta, uuid);
       r.upt.textContent = meta.online ? fmtUptime(meta.uptime) : '—';
       r.expire.textContent = fmtRemaining(meta.expiredAt);
       r.totalUp.textContent = fmtBytes(meta.totalUp);
@@ -1284,8 +1355,31 @@ function drawMinis() {
 // 自行滚动(无滚动条),窗口不再变高。
 // 高度上限与窗口重定位交给 Rust:它知道弹窗贴着托盘图标的哪一边,
 // 会朝远离该边的方向生长,展开节点时不会顶到屏幕外。
-// 调整大小与窗口初始化存在竞态,设置后校验实际高度,不符则重试。
+//
+// 同一时刻只允许一轮在跑。快照、历史、focus 刷新都会触发调整,各自捕获一个
+// 高度再各跑一轮重试的话,应用刚启动、节点还没到的那次打开会让窗口在"空列表"
+// 和"有节点"两个高度之间来回跳 —— 这就是第一次打开时下半截闪的原因。
+let fitting = false;
+let fitAgain = false;
+
 async function fitHeight() {
+  if (fitting) {
+    // 正在跑的那一轮拿的是过期高度了,让它收尾时按最新内容重量一次
+    fitAgain = true;
+    return;
+  }
+  fitting = true;
+  try {
+    do {
+      fitAgain = false;
+      await fitHeightOnce();
+    } while (fitAgain);
+  } finally {
+    fitting = false;
+  }
+}
+
+async function fitHeightOnce() {
   const panel = document.getElementById('panel');
   panel.style.height = 'auto';
   const needed = panel.offsetHeight;
@@ -1296,11 +1390,18 @@ async function fitHeight() {
   panel.style.height = '100%';
   if (window.__chartNeeded === needed) return;
   window.__chartNeeded = needed;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  // 最多下发两次。窗口刚创建时 set_size 可能被初始化盖掉,所以保留一次补发;
+  // 但补发之间只是等 viewport 跟上,不反复下发同一个高度 —— 窗口已经是那个
+  // 尺寸了,再设一次只会让它多跳一下。
+  for (let issue = 0; issue < 2; issue++) {
     const applied = await invoke('resize_chart', { height: needed }).catch(() => null);
     if (typeof applied !== 'number') return;
-    await new Promise((r) => setTimeout(r, 120));
-    if (window.innerHeight === Math.round(applied)) return;
+    for (let wait = 0; wait < 6; wait++) {
+      await new Promise((r) => setTimeout(r, 60));
+      if (window.innerHeight === Math.round(applied)) return;
+      // 内容又变了,别再为这个过期高度较劲,交给下一轮
+      if (fitAgain) return;
+    }
   }
 }
 
@@ -1378,6 +1479,7 @@ async function refresh() {
     cpuWarnPct = s.cpu_warn_pct || 80;
     memWarnPct = s.mem_warn_pct || 85;
     hiddenNodes = new Set(s.hidden_nodes || []);
+    nodeBadge = BADGE_SLOTS[s.node_badge] ? s.node_badge : 'tags';
     // 展开的节点被隐藏后就没有对应的卡片了,顺手收起
     if (expandedUuid && hiddenNodes.has(expandedUuid)) expandedUuid = null;
   } catch (e) { /* keep current values */ }

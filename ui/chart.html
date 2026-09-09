@@ -224,6 +224,13 @@
   }
   /* 指标徽章沿用格子图的配色:绿=好,黄=注意,红=告警 */
   .nrow .ntag.num { font-variant-numeric: tabular-nums; }
+  /* 速率徽章分三栏:箭头 | 数值 | 单位。三栏都定宽,数值右对齐贴着单位栏,
+     所以不管是 1.7M 还是 340K,相邻两行的数字都落在同一条竖线上。
+     箭头与单位用次级色,读的时候先看到数字。 */
+  .nrow .ntag.rate { display: inline-flex; align-items: baseline; width: 52px; color: var(--ink); }
+  .nrow .ntag.rate .sym { flex: none; width: 7px; margin-right: 3px; color: var(--ink-2); }
+  .nrow .ntag.rate .val { flex: 1; text-align: right; }
+  .nrow .ntag.rate .unit { flex: none; width: 9px; margin-left: 2px; text-align: left; color: var(--ink-2); }
   .nrow .ntag.g { color: var(--down); }
   .nrow .ntag.a { color: var(--amber); }
   .nrow .ntag.r { color: var(--warn); }
@@ -464,11 +471,27 @@ function fmtUptime(s) {
 }
 
 // 徽章里的速率只有几十像素宽,用 1.2M/340K/12B 这种紧凑写法,完整值放 title。
-function fmtRateShort(bps) {
+// 数值与单位分开返回:单位要单独着色,数值要单独定宽对齐。
+// 数值最多三位:四位数会把箭头那一栏挤没。所以按进位后的结果再判一次单位 ——
+// 1023.6K 显示成 1.0M,而不是 1024K。
+function rateParts(bps) {
   if (!Number.isFinite(bps) || bps < 0) bps = 0;
-  if (bps >= 1048576) return (bps / 1048576).toFixed(1) + 'M';
-  if (bps >= 1024) return (bps / 1024).toFixed(0) + 'K';
-  return Math.round(bps) + 'B';
+  if (bps >= 1048576) {
+    const m = bps / 1048576;
+    return m >= 999.95
+      ? { value: (bps / 1073741824).toFixed(1), unit: 'G' }
+      : { value: m.toFixed(1), unit: 'M' };
+  }
+  if (bps >= 1024) {
+    const k = Math.round(bps / 1024);
+    return k >= 1000
+      ? { value: (bps / 1048576).toFixed(1), unit: 'M' }
+      : { value: String(k), unit: 'K' };
+  }
+  const b = Math.round(bps);
+  return b >= 1000
+    ? { value: String(Math.round(bps / 1024)), unit: 'K' }
+    : { value: String(b), unit: 'B' };
 }
 
 // 距到期还有几天;没设到期时间或时间解析不了都返回 null。
@@ -1248,6 +1271,27 @@ function setChip(chip, text, tone, title) {
   chip.title = title;
 }
 
+// 速率徽章的三栏。结构只搭一次,之后每次轮询只改文字 —— 每秒重建一遍
+// DOM 没必要,徽章模式换了 buildNodes 本来就会重建整行。
+function setRateChip(chip, arrow, bps, online, label) {
+  if (!chip) return;
+  if (chip.childElementCount !== 3) {
+    chip.textContent = '';
+    for (const cls of ['sym', 'val', 'unit']) {
+      const part = document.createElement('span');
+      part.className = cls;
+      chip.appendChild(part);
+    }
+  }
+  chip.className = 'ntag num rate';
+  const [sym, val, unit] = chip.children;
+  sym.textContent = arrow;
+  const parts = online ? rateParts(bps) : null;
+  val.textContent = parts ? parts.value : '—';
+  unit.textContent = parts ? parts.unit : '';
+  chip.title = parts ? label + ' ' + fmtRate(bps) : '离线';
+}
+
 // 名称后的指标徽章。阈值与展开卡片里的格子图一致,同一个数在两处看到的
 // 颜色才是一个意思。
 function paintBadges(chips, meta, uuid) {
@@ -1263,10 +1307,8 @@ function paintBadges(chips, meta, uuid) {
   } else if (nodeBadge === 'net') {
     const s = nodeSeries.get(uuid);
     const last = meta.online ? s && s[s.length - 1] : null;
-    setChip(chips[0], '↑' + (last ? fmtRateShort(last.up) : '—'), '',
-      last ? '上行 ' + fmtRate(last.up) : '离线');
-    setChip(chips[1], '↓' + (last ? fmtRateShort(last.down) : '—'), '',
-      last ? '下行 ' + fmtRate(last.down) : '离线');
+    setRateChip(chips[0], '↑', last && last.up, !!last, '上行');
+    setRateChip(chips[1], '↓', last && last.down, !!last, '下行');
   } else {
     const days = remainingDays(meta.expiredAt);
     setChip(chips[0], fmtRemaining(meta.expiredAt),

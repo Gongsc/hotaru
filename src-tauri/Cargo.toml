@@ -29,6 +29,38 @@ parking_lot = "0.12"
 log = "0.4"
 url = "2"
 
+# Reaching the NSStatusItem's button, which Tauri does not expose: to mark it
+# selected while the popover is open, and to give it the two-line rate text the
+# plain string title cannot express. Already in the tree by way of Tauri
+# itself, so this costs no extra build.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "NSApplication",
+  "NSAttributedString",
+  "NSButton",
+  "NSCell",
+  "NSControl",
+  "NSFont",
+  "NSFontDescriptor",
+  "NSParagraphStyle",
+  "NSResponder",
+  "NSStatusBarButton",
+  "NSText",
+  "NSView",
+  "NSWindow",
+  "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSAttributedString",
+  "NSDictionary",
+  "NSRange",
+  "NSString",
+  "NSValue",
+] }
+
 [profile.release]
 codegen-units = 1
 lto = true

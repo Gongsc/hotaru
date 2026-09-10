@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "chart",
-  "description": "Chart popover: needs window mutations (hide/drag) that core:default does not grant. Sizing and repositioning run in Rust so the popover can stay anchored to the tray icon.",
+  "description": "Chart popover: needs window mutations (hide/drag) that core:default does not grant. Hiding normally goes through the hide_chart command instead, so Rust can drop the tray highlight with it; allow-hide stays as the fallback. Sizing and repositioning run in Rust so the popover can stay anchored to the tray icon.",
   "windows": ["chart"],
   "permissions": [
     "core:default",

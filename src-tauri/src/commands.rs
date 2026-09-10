@@ -401,6 +401,15 @@ pub fn open_settings_cmd(app: AppHandle) {
     windows::open_settings(&app);
 }
 
+/// Dismiss the popover from the page (Esc, or after it opens another window).
+///
+/// The page could hide its own window, but then Rust never learns the popover
+/// left the screen and the menu bar item stays looking selected.
+#[tauri::command]
+pub fn hide_chart(app: AppHandle) {
+    windows::close_chart(&app);
+}
+
 #[tauri::command]
 pub fn set_chart_pinned(state: State<'_, AppState>, pinned: bool) {
     state

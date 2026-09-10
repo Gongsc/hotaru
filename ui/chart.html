@@ -156,6 +156,8 @@
     font-size: 8px; line-height: 12px; font-weight: 700; text-align: center;
     pointer-events: none;
   }
+  /* 分组是单选,没有个数好显示;用一个实心点表示"筛选生效中" */
+  .tagbtn .cnt.dot { min-width: 0; width: 7px; height: 7px; padding: 0; right: -1px; bottom: -1px; }
   /* display:flex 会盖掉 UA 的 [hidden]{display:none},得显式让位 */
   .tagbtn[hidden] { display: none; }
   /* 浮层而非行内块:标签多寡不该改变弹窗高度。方向与高度由 placePop
@@ -198,6 +200,8 @@
   .tagpop.menu button:hover { background: var(--chip); color: var(--ink); }
   .tagpop.menu button.on { background: transparent; color: var(--up); font-weight: 600; }
   .tagpop.menu button i { font-style: normal; opacity: .9; }
+  /* 分组名来自后端,可能很长:压在菜单宽度内省略,别把浮层撑破 */
+  .tagpop.menu button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 节点区在高度被屏幕封顶后可滚动,但按要求不显示滚动条 */
   .nodes {
     flex: 1; min-height: 0; padding: 0 12px 6px;
@@ -346,6 +350,14 @@
       </button>
       <div class="tagpop menu" id="sortpop" hidden role="group" aria-label="排序方式"></div>
     </span>
+    <span class="tagwrap">
+      <button class="tagbtn" id="btn-group" type="button" hidden aria-expanded="false" aria-haspopup="true" title="按分组筛选" aria-label="按分组筛选">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>
+        </svg>
+      </button>
+      <div class="tagpop menu" id="grouppop" hidden role="group" aria-label="按分组筛选"></div>
+    </span>
   </div>
   <div class="nodes" id="nodes"><div class="empty" style="color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;">等待数据…</div></div>
   <div class="pf">
@@ -378,6 +390,9 @@ let expandedUuid = null;         // accordion: which node card is open
 let hiddenNodes = new Set();     // uuids the user unchecked in 设置 → 节点
 let nodeQuery = '';              // 搜索框内容(小写),匹配名称或标签
 let activeTags = new Set();      // 选中的标签,任一命中即显示(OR)
+// 选中的分组。一个节点在 Komari 里最多属于一个分组,所以这里是单选:
+// null = 全部分组(默认,不筛选),'' = 未分组,其余为分组名。
+let activeGroup = null;
 // 折叠行里名称后面显示什么(设置 → 外观):标签,或一组实时指标。
 // 指标模式下的槽位数量,由 buildNodes 建好、patchNodes 就地填值。
 const BADGE_SLOTS = { ping: 2, net: 2, expiry: 1 };
@@ -385,7 +400,7 @@ let nodeBadge = 'tags';
 // 排序:再次点同一项就反向。默认按名称升序。
 const SORT_KEYS = [
   ['name', '名称'], ['os', '系统'], ['cpu', 'CPU'], ['mem', '内存'],
-  ['net', '带宽'], ['traffic', '流量'], ['lat', '延迟'], ['loss', '丢包'],
+  ['net', '网络速率'], ['traffic', '流量'], ['lat', '延迟'], ['loss', '丢包'],
   ['expiry', '到期时间'],
 ];
 let sortKey = 'name';
@@ -889,7 +904,7 @@ function compareNodes(a, b) {
   return (sortAsc ? r : -r) || byName(a, b);
 }
 
-// 顺序按"成员+排序设置"缓存:CPU、带宽这类值每秒都在变,若每次刷新都重排,
+// 顺序按"成员+排序设置"缓存:CPU、网络速率这类值每秒都在变,若每次刷新都重排,
 // 列表会一直抖到没法点。刷新(重新聚焦弹窗)或改排序时才重新算。
 let orderCache = { key: null, uuids: [] };
 
@@ -898,6 +913,7 @@ function visibleUuids() {
     if (hiddenNodes.has(uuid)) return false;
     const meta = nodeMeta.get(uuid);
     const tags = meta.tags || [];
+    if (activeGroup !== null && (meta.group || '') !== activeGroup) return false;
     if (activeTags.size && !tags.some((tag) => activeTags.has(tag))) return false;
     if (!nodeQuery) return true;
     return (meta.name || '').toLowerCase().includes(nodeQuery)
@@ -918,11 +934,28 @@ function tagUniverse() {
   return [...tags].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
+// 分组栏同样只看未被隐藏的节点
+function groupUniverse() {
+  const groups = new Set();
+  let ungrouped = false;
+  for (const [uuid, meta] of nodeMeta) {
+    if (hiddenNodes.has(uuid)) continue;
+    if (meta.group) groups.add(meta.group);
+    else ungrouped = true;
+  }
+  const list = [...groups].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  // 后端只给一部分节点配了分组时,剩下的也得有办法单独看
+  if (ungrouped && list.length) list.push('');
+  return list;
+}
+
 let tagbarKey = null;
-// 同时只开一个浮层:null | 'tags' | 'sort'
+let groupbarKey = null;
+// 同时只开一个浮层:null | 'tags' | 'sort' | 'group'
 const POPS = {
   tags: { pop: 'tagpop', btn: 'btn-tags' },
   sort: { pop: 'sortpop', btn: 'btn-sort' },
+  group: { pop: 'grouppop', btn: 'btn-group' },
 };
 let openPop = null;
 
@@ -995,6 +1028,70 @@ function renderSortPop() {
     });
     pop.appendChild(item);
   }
+}
+
+// 单选菜单:选中"全部分组"就是不筛选,按钮上也就不该有下标 —— 下标同时
+// 充当"筛选生效中"的指示,分组是单选没有个数好显示,所以用一个实心点。
+function renderGroupbar() {
+  const groups = groupUniverse();
+  // 选中的分组消失了(节点下线或被隐藏)就退回全部,否则会永久筛空
+  if (activeGroup !== null && !groups.includes(activeGroup)) activeGroup = null;
+  const key = groups.join('\n') + '|' + activeGroup;
+  if (key === groupbarKey) return;
+  groupbarKey = key;
+
+  const btn = document.getElementById('btn-group');
+  btn.hidden = !groups.length;
+  btn.classList.toggle('on', activeGroup !== null);
+  const label = activeGroup === null
+    ? '按分组筛选'
+    : '按分组筛选（' + (activeGroup || '未分组') + '）';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  let cnt = btn.querySelector('.cnt');
+  if (activeGroup !== null) {
+    if (!cnt) {
+      cnt = document.createElement('span');
+      cnt.className = 'cnt dot';
+      cnt.setAttribute('aria-hidden', 'true');
+      btn.appendChild(cnt);
+    }
+  } else if (cnt) {
+    cnt.remove();
+  }
+  if (btn.hidden && openPop === 'group') setPop(null);
+
+  const pop = document.getElementById('grouppop');
+  pop.innerHTML = '';
+  const items = [[null, '全部分组'], ...groups.map((g) => [g, g || '未分组'])];
+  for (const [value, text] of items) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    const on = value === activeGroup;
+    item.className = on ? 'on' : '';
+    item.setAttribute('aria-pressed', on ? 'true' : 'false');
+    const name = document.createElement('span');
+    name.textContent = text;              // 后端内容,只用 textContent
+    item.appendChild(name);
+    if (on) {
+      const mark = document.createElement('i');
+      mark.textContent = '✓';
+      item.appendChild(mark);
+    }
+    item.addEventListener('click', (ev) => {
+      // 同 renderTagbar:重建会把这个按钮从 DOM 摘掉,冒泡到 document 时
+      // closest 就找不到 #grouppop,外部点击处理器会误判成"点在外面"。
+      ev.stopPropagation();
+      if (value === activeGroup) return;
+      activeGroup = value;
+      groupbarKey = null;
+      renderGroupbar();
+      syncNodes();
+    });
+    pop.appendChild(item);
+  }
+  // 内容变了高度也变,重新量一次剩余空间
+  if (openPop === 'group') placePop('group');
 }
 
 function renderTagbar() {
@@ -1077,6 +1174,7 @@ function nodesKeyOf() {
 
 function syncNodes() {
   renderTagbar();
+  renderGroupbar();
   const key = nodesKeyOf();
   if (key !== nodesKey) {
     nodesKey = key;
@@ -1098,7 +1196,9 @@ function buildNodes() {
     empty.style.cssText = 'color:var(--ink-2);font-size:12px;text-align:center;padding:18px 0;';
     empty.textContent = !nodeMeta.size
       ? '暂无节点'
-      : (nodeQuery || activeTags.size ? '没有匹配的节点' : '节点已全部隐藏');
+      : (nodeQuery || activeTags.size || activeGroup !== null
+        ? '没有匹配的节点'
+        : '节点已全部隐藏');
     container.appendChild(empty);
     fitHeight();
     return;
@@ -1481,6 +1581,7 @@ function ingestSnap(snap) {
         uptime: n.uptime_secs,
         region: n.region || '',
         os: n.os || "",
+        group: n.group || '',
         tags: n.tags || [],
         latency: n.latency ?? null,
         loss: n.loss ?? null,
@@ -1511,7 +1612,7 @@ function ingestSnap(snap) {
 async function refresh() {
   // 每次重新聚焦(即每次打开)都重算高度:屏幕可能换了一块,可用空间也就变了。
   window.__chartNeeded = null;
-  // 顺序按 CPU、带宽这类实时值排时会一直变,平时靠缓存稳住;每次打开
+  // 顺序按 CPU、网络速率这类实时值排时会一直变,平时靠缓存稳住;每次打开
   // 弹窗重新算一次,这样看到的排序是当下的。
   orderCache.key = null;
   try {
@@ -1581,13 +1682,14 @@ async function fetchPing(uuid) {
   } catch (e) { /* 网络失败保持现有内容 */ }
 }
 
+// 走 hide_chart 而不是 win.hide():Rust 那边要同步收掉托盘图标的高亮
 document.getElementById('btn-panel').addEventListener('click', async () => {
   await invoke('open_panel_cmd').catch(() => {});
-  win.hide();
+  invoke('hide_chart').catch(() => win.hide());
 });
 document.getElementById('btn-settings').addEventListener('click', async () => {
   await invoke('open_settings_cmd').catch(() => {});
-  win.hide();
+  invoke('hide_chart').catch(() => win.hide());
 });
 const searchInput = document.getElementById('node-search');
 searchInput.addEventListener('input', () => {
@@ -1605,10 +1707,15 @@ document.getElementById('btn-sort').addEventListener('click', (e) => {
   setPop(openPop === 'sort' ? null : 'sort');
 });
 
+document.getElementById('btn-group').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setPop(openPop === 'group' ? null : 'group');
+});
+
 document.addEventListener('click', (e) => {
   if (!openPop) return;
   if (e.target instanceof Element
-    && e.target.closest('#tagpop, #btn-tags, #sortpop, #btn-sort')) return;
+    && e.target.closest('#tagpop, #btn-tags, #sortpop, #btn-sort, #grouppop, #btn-group')) return;
   setPop(null);
 });
 
@@ -1620,15 +1727,17 @@ window.addEventListener('keydown', (e) => {
     setPop(null);
     return;
   }
-  if (searchInput.value || activeTags.size) {
+  if (searchInput.value || activeTags.size || activeGroup !== null) {
     searchInput.value = '';
     nodeQuery = '';
     activeTags.clear();
     tagbarKey = null;
+    activeGroup = null;
+    groupbarKey = null;
     syncNodes();
     return;
   }
-  win.hide();
+  invoke('hide_chart').catch(() => win.hide());
 });
 window.addEventListener('resize', () => {
   lastDraw = 0;

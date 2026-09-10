@@ -578,6 +578,7 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
                 // Toggle-close without destroying the webview; reopening can
                 // reuse the current node data and UI state.
                 let _ = window.hide();
+                crate::tray::set_popover_active(app, false);
                 return;
             }
             if !pinned {
@@ -645,6 +646,7 @@ pub fn open_chart(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
 
     let _ = window.show();
     let _ = window.set_focus();
+    crate::tray::set_popover_active(app, true);
 }
 
 /// Give the popover rounded corners on Windows, matching the macOS popover.
@@ -680,10 +682,17 @@ fn round_window_corners(window: &WebviewWindow) {
 #[cfg(not(target_os = "windows"))]
 fn round_window_corners(_window: &WebviewWindow) {}
 
-/// Close the chart popover from the Rust side (blur timeout / close
-/// request). Hiding keeps the page and its cached node state alive.
-pub fn close_chart(window: &tauri::Window) {
-    let _ = window.hide();
+/// Close the chart popover from the Rust side (blur timeout, close request,
+/// or the page's own dismiss paths by way of `hide_chart`). Hiding keeps the
+/// page and its cached node state alive.
+///
+/// Every dismissal goes through here so the menu bar item stops looking
+/// selected at the same moment the popover leaves the screen.
+pub fn close_chart(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("chart") {
+        let _ = window.hide();
+    }
+    crate::tray::set_popover_active(app, false);
 }
 
 fn position_chart(

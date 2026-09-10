@@ -1682,13 +1682,14 @@ async function fetchPing(uuid) {
   } catch (e) { /* 网络失败保持现有内容 */ }
 }
 
+// 走 hide_chart 而不是 win.hide():Rust 那边要同步收掉托盘图标的高亮
 document.getElementById('btn-panel').addEventListener('click', async () => {
   await invoke('open_panel_cmd').catch(() => {});
-  win.hide();
+  invoke('hide_chart').catch(() => win.hide());
 });
 document.getElementById('btn-settings').addEventListener('click', async () => {
   await invoke('open_settings_cmd').catch(() => {});
-  win.hide();
+  invoke('hide_chart').catch(() => win.hide());
 });
 const searchInput = document.getElementById('node-search');
 searchInput.addEventListener('input', () => {
@@ -1736,7 +1737,7 @@ window.addEventListener('keydown', (e) => {
     syncNodes();
     return;
   }
-  win.hide();
+  invoke('hide_chart').catch(() => win.hide());
 });
 window.addEventListener('resize', () => {
   lastDraw = 0;

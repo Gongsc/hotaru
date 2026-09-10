@@ -64,7 +64,7 @@ pub fn run() {
                 } else if window.label() == "chart" {
                     // Preserve the popover webview and its cached node state.
                     api.prevent_close();
-                    crate::windows::close_chart(window);
+                    crate::windows::close_chart(window.app_handle());
                 }
             }
             WindowEvent::Focused(false) => {
@@ -90,7 +90,7 @@ pub fn run() {
                                 .state::<AppState>()
                                 .chart_hidden_at
                                 .lock() = Some(std::time::Instant::now());
-                            crate::windows::close_chart(&win);
+                            crate::windows::close_chart(win.app_handle());
                         }
                     });
                 }
@@ -114,6 +114,7 @@ pub fn run() {
             commands::open_settings_cmd,
             commands::get_chart_pinned,
             commands::set_chart_pinned,
+            commands::hide_chart,
             commands::resize_chart,
             commands::get_ping_records,
         ])

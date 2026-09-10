@@ -1546,6 +1546,8 @@ version = "0.1.9"
 dependencies = [
  "futures-util",
  "log",
+ "objc2",
+ "objc2-app-kit",
  "parking_lot",
  "reqwest 0.12.28",
  "semver",

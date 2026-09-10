@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use parking_lot::{const_mutex, Mutex};
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -87,6 +89,13 @@ pub fn apply(app: &AppHandle) {
         ICON_SIZE,
     )), cfg!(target_os = "macos"));
     let _ = tray.set_tooltip(Some(tooltip_text(&snap, &agg)));
+    // Redrawing the icon clears the button's highlight, so put it back while
+    // the popover is open. Only while it is: re-asserting `false` here would
+    // fight the highlight AppKit draws for the right-click menu. `apply` is
+    // already on the main thread, so this can go straight through.
+    if POPOVER_ACTIVE.load(Ordering::Relaxed) {
+        highlight_status_item(true);
+    }
 
     #[cfg(target_os = "macos")]
     // tray-icon 0.24.x ignores `None` on macOS instead of clearing the
@@ -96,6 +105,78 @@ pub fn apply(app: &AppHandle) {
 
     sync_menu(app);
 }
+
+// ---------------------------------------------------------------------------
+// Click feedback
+// ---------------------------------------------------------------------------
+
+/// Whether the popover is on screen, mirrored onto the menu bar item.
+static POPOVER_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Draw the menu bar item selected, or not, to match the popover.
+///
+/// A status item highlights itself only for the menu AppKit shows on its
+/// behalf. The popover is a window of our own, so clicking the icon otherwise
+/// leaves it looking untouched for as long as the popover is up. Setting the
+/// button's highlight ourselves borrows the same selected background a native
+/// menu bar item draws, and costs nothing on Windows, where the tray already
+/// has its own pressed state.
+pub fn set_popover_active(app: &AppHandle, active: bool) {
+    POPOVER_ACTIVE.store(active, Ordering::Relaxed);
+    // Reached from the blur watchdog thread as well as the tray click, and
+    // AppKit only takes this from the main thread.
+    let _ = app.run_on_main_thread(move || highlight_status_item(active));
+}
+
+/// Highlight the one `NSStatusBarButton` in this process.
+///
+/// Tauri keeps the `NSStatusItem` private, so the button is found the long way
+/// round: AppKit parks it in a window of its own in the menu bar, and every
+/// other window of ours holds a webview instead. Only this process's windows
+/// are searched, and only this app puts a status item in them. Does nothing
+/// off the main thread, or before the tray exists.
+#[cfg(target_os = "macos")]
+fn highlight_status_item(active: bool) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let windows = NSApplication::sharedApplication(mtm).windows();
+    for window in &windows {
+        let Some(view) = window.contentView() else {
+            continue;
+        };
+        if let Some(button) = find_status_button(&view) {
+            button.setHighlighted(active);
+            return;
+        }
+    }
+}
+
+/// The button sits one level inside the status bar window's content view, but
+/// look a little deeper anyway rather than depend on that layout.
+#[cfg(target_os = "macos")]
+fn find_status_button(
+    view: &objc2_app_kit::NSView,
+) -> Option<objc2::rc::Retained<objc2_app_kit::NSStatusBarButton>> {
+    use objc2::rc::Retained;
+    use objc2_app_kit::NSStatusBarButton;
+
+    if let Some(button) = view.downcast_ref::<NSStatusBarButton>() {
+        return Some(Retained::from(button));
+    }
+    for sub in &view.subviews() {
+        if let Some(button) = find_status_button(&sub) {
+            return Some(button);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn highlight_status_item(_active: bool) {}
 
 // ---------------------------------------------------------------------------
 // Menu

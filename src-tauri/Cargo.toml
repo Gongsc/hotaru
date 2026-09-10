@@ -29,6 +29,22 @@ parking_lot = "0.12"
 log = "0.4"
 url = "2"
 
+# Only to mark the menu bar item selected while the popover is open; Tauri
+# does not expose the underlying NSStatusItem. Already in the tree by way of
+# Tauri itself, so this costs no extra build.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "NSApplication",
+  "NSButton",
+  "NSCell",
+  "NSControl",
+  "NSResponder",
+  "NSStatusBarButton",
+  "NSView",
+  "NSWindow",
+] }
+
 [profile.release]
 codegen-units = 1
 lto = true

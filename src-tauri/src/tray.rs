@@ -88,6 +88,18 @@ pub fn apply(app: &AppHandle) {
         ICON_SIZE,
         ICON_SIZE,
     )), cfg!(target_os = "macos"));
+    #[cfg(target_os = "macos")]
+    if settings.show_menu_bar_text {
+        set_menu_bar_rates(&agg);
+    } else {
+        // tray-icon 0.24.x ignores `None` on macOS instead of clearing the
+        // existing NSStatusBarButton title. An explicit empty string both
+        // clears the stale text and makes AppKit recalculate the item width.
+        let _ = tray.set_title(Some(String::new()));
+    }
+    // Keep this after the title: `set_tooltip` is the only call of tray-icon's
+    // that also re-fits its click-target subview to the button, and the title
+    // is what changes the button's width.
     let _ = tray.set_tooltip(Some(tooltip_text(&snap, &agg)));
     // Redrawing the icon clears the button's highlight, so put it back while
     // the popover is open. Only while it is: re-asserting `false` here would
@@ -96,12 +108,6 @@ pub fn apply(app: &AppHandle) {
     if POPOVER_ACTIVE.load(Ordering::Relaxed) {
         highlight_status_item(true);
     }
-
-    #[cfg(target_os = "macos")]
-    // tray-icon 0.24.x ignores `None` on macOS instead of clearing the
-    // existing NSStatusBarButton title. An explicit empty string both clears
-    // the stale text and makes AppKit recalculate the status item width.
-    let _ = tray.set_title(Some(menu_bar_title(settings.show_menu_bar_text, &agg)));
 
     sync_menu(app);
 }
@@ -137,22 +143,29 @@ pub fn set_popover_active(app: &AppHandle, active: bool) {
 /// off the main thread, or before the tray exists.
 #[cfg(target_os = "macos")]
 fn highlight_status_item(active: bool) {
+    if let Some(button) = status_button() {
+        button.setHighlighted(active);
+    }
+}
+
+/// This process's status item button, or `None` off the main thread or before
+/// the tray exists.
+#[cfg(target_os = "macos")]
+fn status_button() -> Option<objc2::rc::Retained<objc2_app_kit::NSStatusBarButton>> {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSApplication;
 
-    let Some(mtm) = MainThreadMarker::new() else {
-        return;
-    };
+    let mtm = MainThreadMarker::new()?;
     let windows = NSApplication::sharedApplication(mtm).windows();
     for window in &windows {
         let Some(view) = window.contentView() else {
             continue;
         };
         if let Some(button) = find_status_button(&view) {
-            button.setHighlighted(active);
-            return;
+            return Some(button);
         }
     }
+    None
 }
 
 /// The button sits one level inside the status bar window's content view, but
@@ -273,18 +286,140 @@ fn tooltip_text(snap: &MonitorSnapshot, agg: &Aggregate) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// macOS menu bar text
+// ---------------------------------------------------------------------------
+
+/// Point size of the menu bar rates. Two lines have to sit inside the height
+/// of the menu bar, so this runs smaller than ordinary menu bar text.
+#[cfg(target_os = "macos")]
+const MENU_BAR_FONT_SIZE: f64 = 9.0;
+/// Leading between the two lines, pinned rather than left to the font: the
+/// system font's own line height would push the pair out of the menu bar.
+#[cfg(target_os = "macos")]
+const MENU_BAR_LINE_HEIGHT: f64 = 10.0;
+/// Nudge down from where the button would otherwise centre the pair. Pinning
+/// the line height above crops the first line's ascent, which lifts both lines
+/// off centre; this drops them back so the block of figures shares a centre
+/// line with the icon beside it, measured ink to ink. Half a device pixel is
+/// as close as it gets — the layout quantises — and the leftover half is spent
+/// upwards, which is the side that reads as centred.
+#[cfg(target_os = "macos")]
+const MENU_BAR_BASELINE_OFFSET: f64 = -4.25;
+/// Where the rates' right edge lands, measured from the start of the line.
+/// Fixed, so the item keeps one width while the figures change under it —
+/// wide enough for the longest rate the ladder below can produce.
+#[cfg(target_os = "macos")]
+const MENU_BAR_TAB_STOP: f64 = 56.0;
+
+/// The menu bar's own rate format: a space before the unit, and only as many
+/// digits as the rung needs. [`fmt_rate`]'s decimals throughout are for the
+/// tooltip and the popover, which have room for them.
+///
+/// B/s and KB/s are whole numbers — a single byte or kilobyte either way is
+/// noise. A whole MB/s is a coarse step, though: 1.5 and 2.4 would both read
+/// as 2, so that rung and the one above it keep a decimal, up to the point
+/// where three digits already say everything — see [`with_decimal`].
 #[cfg(any(target_os = "macos", test))]
-fn menu_bar_text(agg: &Aggregate) -> String {
-    format!("↑{} ↓{}", fmt_rate(agg.net_up), fmt_rate(agg.net_down))
+fn fmt_rate_menu_bar(bps: f64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * KB;
+    const GB: f64 = 1024.0 * MB;
+    if bps < 0.0 {
+        "0 B/s".into()
+    } else if bps < KB {
+        format!("{bps:.0} B/s")
+    } else if bps < MB {
+        format!("{:.0} KB/s", bps / KB)
+    } else if bps < GB {
+        with_decimal(bps / MB, "MB/s")
+    } else {
+        with_decimal(bps / GB, "GB/s")
+    }
 }
 
+/// A decimal below 100, none above it. Past 100 the tenths digit is worth a
+/// fraction of a percent, and holding on to it would cost every reading a
+/// permanently wider item: `1023.9 MB/s` runs some 15pt past the tab stop the
+/// rest of the ladder fits inside, and the arrow column would have nowhere to
+/// go.
 #[cfg(any(target_os = "macos", test))]
-fn menu_bar_title(show: bool, agg: &Aggregate) -> String {
-    if show {
-        menu_bar_text(agg)
+fn with_decimal(value: f64, unit: &str) -> String {
+    if value < 100.0 {
+        format!("{value:.1} {unit}")
     } else {
-        String::new()
+        format!("{value:.0} {unit}")
     }
+}
+
+/// Up over down, each on its own line. The tab is what keeps the two columns:
+/// a right-aligned tab stop leaves the arrows in a column on the left and
+/// lines the figures up on the right.
+#[cfg(any(target_os = "macos", test))]
+fn menu_bar_text(agg: &Aggregate) -> String {
+    format!(
+        "↑\t{}\n↓\t{}",
+        fmt_rate_menu_bar(agg.net_up),
+        fmt_rate_menu_bar(agg.net_down)
+    )
+}
+
+/// Put the two-line rates on the status item.
+///
+/// A status item's plain string title is one line in the menu bar font, so the
+/// stacked pair has to go on as an attributed string instead — which also
+/// means setting it straight on the button, since that is not something Tauri
+/// or tray-icon pass through. No colour is set: left alone, the button draws
+/// the title in whatever the menu bar currently calls for, including inverting
+/// it while the item is highlighted.
+#[cfg(target_os = "macos")]
+fn set_menu_bar_rates(agg: &Aggregate) {
+    use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSBaselineOffsetAttributeName, NSFont, NSFontAttributeName, NSFontWeightRegular,
+        NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextTab,
+    };
+    use objc2_foundation::{
+        NSArray, NSDictionary, NSMutableAttributedString, NSNumber, NSRange, NSString,
+    };
+
+    let Some(button) = status_button() else {
+        return;
+    };
+
+    let style = NSMutableParagraphStyle::new();
+    style.setAlignment(NSTextAlignment::Left);
+    style.setMinimumLineHeight(MENU_BAR_LINE_HEIGHT);
+    style.setMaximumLineHeight(MENU_BAR_LINE_HEIGHT);
+    let tab = unsafe {
+        NSTextTab::initWithTextAlignment_location_options(
+            NSTextTab::alloc(),
+            NSTextAlignment::Right,
+            MENU_BAR_TAB_STOP,
+            &NSDictionary::new(),
+        )
+    };
+    style.setTabStops(Some(&NSArray::from_retained_slice(&[tab])));
+
+    // Monospaced digits: proportional ones would shuffle the columns sideways
+    // every time a figure changed.
+    let font = NSFont::monospacedDigitSystemFontOfSize_weight(MENU_BAR_FONT_SIZE, unsafe {
+        NSFontWeightRegular
+    });
+
+    let text = NSString::from_str(&menu_bar_text(agg));
+    let title = NSMutableAttributedString::from_nsstring(&text);
+    let all = NSRange::new(0, text.length());
+    unsafe {
+        title.addAttribute_value_range(NSFontAttributeName, &font, all);
+        title.addAttribute_value_range(NSParagraphStyleAttributeName, &style, all);
+        title.addAttribute_value_range(
+            NSBaselineOffsetAttributeName,
+            &NSNumber::new_f64(MENU_BAR_BASELINE_OFFSET),
+            all,
+        );
+    }
+    button.setAttributedTitle(&title);
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -301,10 +436,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disabled_menu_bar_text_is_explicitly_empty() {
-        let agg = Aggregate::default();
-        assert_eq!(menu_bar_title(false, &agg), "");
-        assert!(!menu_bar_title(true, &agg).is_empty());
+    fn menu_bar_rates_keep_a_decimal_only_from_mb_up() {
+        const KB: f64 = 1024.0;
+        const MB: f64 = 1024.0 * KB;
+        const GB: f64 = 1024.0 * MB;
+        assert_eq!(fmt_rate_menu_bar(0.0), "0 B/s");
+        assert_eq!(fmt_rate_menu_bar(-1.0), "0 B/s");
+        assert_eq!(fmt_rate_menu_bar(940.0), "940 B/s");
+        // 16 KB/s and change still reads as 16, not 16.3
+        assert_eq!(fmt_rate_menu_bar(16.3 * KB), "16 KB/s");
+        assert_eq!(fmt_rate_menu_bar(KB), "1 KB/s");
+        // from MB up a whole unit is too coarse to round to
+        assert_eq!(fmt_rate_menu_bar(MB), "1.0 MB/s");
+        assert_eq!(fmt_rate_menu_bar(2.75 * MB), "2.8 MB/s");
+        assert_eq!(fmt_rate_menu_bar(4.0 * GB), "4.0 GB/s");
+        // ...but three digits is the whole budget: past 100 the tenths digit
+        // buys nothing and would push the text into the arrow column.
+        assert_eq!(fmt_rate_menu_bar(99.94 * MB), "99.9 MB/s");
+        assert_eq!(fmt_rate_menu_bar(125.4 * MB), "125 MB/s");
+        // the widest the ladder can produce, which the tab stop has to clear
+        assert_eq!(fmt_rate_menu_bar(1023.9 * MB), "1024 MB/s");
+    }
+
+    #[test]
+    fn menu_bar_text_stacks_the_two_rates_around_a_tab() {
+        let agg = Aggregate {
+            net_up: 16.0 * 1024.0,
+            net_down: 5.0 * 1024.0,
+            ..Aggregate::default()
+        };
+        // The tab is the column split; the newline is the second line. Both
+        // only mean anything against the paragraph style set alongside them.
+        assert_eq!(menu_bar_text(&agg), "↑\t16 KB/s\n↓\t5 KB/s");
     }
 
     #[test]

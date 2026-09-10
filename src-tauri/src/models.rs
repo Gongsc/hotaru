@@ -71,7 +71,7 @@ pub enum NodeBadge {
     Tags,
     /// 当前延迟与丢包率
     Ping,
-    /// 当前上下行速率
+    /// 当前网络速率
     Net,
     /// 距到期还剩多久
     Expiry,

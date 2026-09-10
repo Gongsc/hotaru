@@ -400,7 +400,7 @@ let nodeBadge = 'tags';
 // 排序:再次点同一项就反向。默认按名称升序。
 const SORT_KEYS = [
   ['name', '名称'], ['os', '系统'], ['cpu', 'CPU'], ['mem', '内存'],
-  ['net', '带宽'], ['traffic', '流量'], ['lat', '延迟'], ['loss', '丢包'],
+  ['net', '网络速率'], ['traffic', '流量'], ['lat', '延迟'], ['loss', '丢包'],
   ['expiry', '到期时间'],
 ];
 let sortKey = 'name';
@@ -904,7 +904,7 @@ function compareNodes(a, b) {
   return (sortAsc ? r : -r) || byName(a, b);
 }
 
-// 顺序按"成员+排序设置"缓存:CPU、带宽这类值每秒都在变,若每次刷新都重排,
+// 顺序按"成员+排序设置"缓存:CPU、网络速率这类值每秒都在变,若每次刷新都重排,
 // 列表会一直抖到没法点。刷新(重新聚焦弹窗)或改排序时才重新算。
 let orderCache = { key: null, uuids: [] };
 
@@ -1612,7 +1612,7 @@ function ingestSnap(snap) {
 async function refresh() {
   // 每次重新聚焦(即每次打开)都重算高度:屏幕可能换了一块,可用空间也就变了。
   window.__chartNeeded = null;
-  // 顺序按 CPU、带宽这类实时值排时会一直变,平时靠缓存稳住;每次打开
+  // 顺序按 CPU、网络速率这类实时值排时会一直变,平时靠缓存稳住;每次打开
   // 弹窗重新算一次,这样看到的排序是当下的。
   orderCache.key = null;
   try {

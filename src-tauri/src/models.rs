@@ -186,6 +186,9 @@ pub struct NodeSnapshot {
     /// e.g. "windows" / "linux" / "darwin".
     #[serde(default)]
     pub os: String,
+    /// Komari node group. A node belongs to at most one; empty when unset.
+    #[serde(default)]
+    pub group: String,
     /// Komari node tags, already split out of its `;`-separated string.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -516,6 +519,9 @@ pub struct ClientInfo {
     pub mem_total: u64,
     #[serde(default, alias = "osAlias", alias = "osName")]
     pub os: String,
+    /// A node's group, unlike its tags, is a single plain name.
+    #[serde(default)]
+    pub group: String,
     /// `;`-separated in Komari's API; see [`split_tags`].
     #[serde(default)]
     pub tags: String,
@@ -535,6 +541,7 @@ impl Default for ClientInfo {
             region: String::new(),
             mem_total: 0,
             os: String::new(),
+            group: String::new(),
             tags: String::new(),
             traffic_limit: 0,
             traffic_limit_type: String::new(),
@@ -608,6 +615,7 @@ pub fn report_to_snapshot(info: &ClientInfo, online: bool, r: &Report) -> NodeSn
         online,
         region: info.region.clone(),
         os: info.os.clone(),
+        group: info.group.clone(),
         tags: split_tags(&info.tags),
         latency: None,
         loss: None,
@@ -763,6 +771,21 @@ mod tests {
         assert_eq!(info.traffic_limit, 1_099_511_627_776);
         assert_eq!(info.traffic_limit_type, "sum");
         assert_eq!(info.expired_at.as_deref(), Some("2027-06-30T00:00:00Z"));
+    }
+
+    #[test]
+    fn group_reaches_the_snapshot_and_is_optional() {
+        let info: ClientInfo =
+            serde_json::from_str(r#"{"uuid":"u","group":"\u751f\u4ea7"}"#).unwrap();
+        assert_eq!(info.group, "生产");
+        let snap = report_to_snapshot(&info, true, &Report::default());
+        assert_eq!(snap.group, "生产");
+
+        // Komari versions without groups simply leave the node ungrouped.
+        let plain: ClientInfo = serde_json::from_str(r#"{"uuid":"u"}"#).unwrap();
+        assert!(report_to_snapshot(&plain, true, &Report::default())
+            .group
+            .is_empty());
     }
 
     #[test]
@@ -953,6 +976,7 @@ mod tests {
                 name: "n".into(),
                 region: String::new(),
                 os: String::new(),
+                group: String::new(),
                 tags: Vec::new(),
                 latency: None,
                 loss: None,
